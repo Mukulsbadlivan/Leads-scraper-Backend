@@ -137,3 +137,20 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# ── Scraper: secrets & generated output ───────────────────────────────────────
+# Environment files (contain API keys — never commit these)
+.env
+.env.local
+.env.*.local
+
+# Generated CSV / JSON output files (can be large and contain PII)
+apps/scraper/*.csv
+apps/scraper/*.json
+
+# node_modules
+node_modules/
+apps/scraper/node_modules/
+
+# Lock files (optional — remove these lines if you want to commit them)
+# apps/scraper/package-lock.json
