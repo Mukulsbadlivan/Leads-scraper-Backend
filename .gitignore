@@ -145,12 +145,23 @@ vite.config.ts.timestamp-*
 .env.*.local
 
 # Generated CSV / JSON output files (can be large and contain PII)
-apps/scraper/*.csv
-apps/scraper/*.json
+data/*.csv
+data/*.json
+*.csv
+*.json
 
 # node_modules
 node_modules/
-apps/scraper/node_modules/
+# BullMQ / Queue
+bull-board-data/
 
-# Lock files (optional — remove these lines if you want to commit them)
-# apps/scraper/package-lock.json
+# Playwright
+playwright-report/
+test-results/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
