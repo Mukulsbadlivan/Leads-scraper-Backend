@@ -208,13 +208,21 @@ export async function runOrchestrator(
 
   await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
 
-  const CHROME_PATH = process.env.CHROME_PATH ||
-    "C:\\Users\\rahul\\AppData\\Local\\ms-playwright\\chromium-1217\\chrome-win64\\chrome.exe";
-  const browser = await chromium.launch({
+  const CHROME_PATH = process.env.CHROME_PATH;
+  const LOCAL_FALLBACK = "C:\\Users\\rahul\\AppData\\Local\\ms-playwright\\chromium-1217\\chrome-win64\\chrome.exe";
+  const launchOptions: Parameters<typeof chromium.launch>[0] = {
     headless: CONFIG.headless,
-    executablePath: CHROME_PATH,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  };
+  if (CHROME_PATH) {
+    launchOptions.executablePath = CHROME_PATH;
+  } else if (fs.existsSync(LOCAL_FALLBACK)) {
+    // Local dev machine — use the pre-installed Chromium if available
+    launchOptions.executablePath = LOCAL_FALLBACK;
+  }
+  // On Render (or any environment without CHROME_PATH set and no local fallback),
+  // Playwright will automatically locate its own installed browser.
+  const browser = await chromium.launch(launchOptions);
 
   const context = await browser.newContext({
     userAgent:

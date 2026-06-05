@@ -4,7 +4,7 @@
 //   1. LinkedIn Jobs RSS feed (public, no auth needed)
 //   2. Remotive.com API (free, returns real company + job data)
 
-import { getLocationSearchString } from "../../../Job portal frontend/shared/config/LocationConfig.ts";
+import { getLocationSearchString } from "../config/LocationConfig.ts";
 
 export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     const location = getLocationSearchString(locationObj.country, locationObj.state, locationObj.city);

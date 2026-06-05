@@ -11,7 +11,7 @@
  */
 import { Router, Request, Response } from "express";
 import { ObjectId } from "mongodb";
-import { getLocationSearchString } from "../../../../Job portal frontend/shared/config/LocationConfig.ts";
+import { getLocationSearchString } from "../../config/LocationConfig.ts";
 import { enqueueScrapeJob } from "../../queue/scrapeQueue.ts";
 import {
   createQueuedScrapeRun,
