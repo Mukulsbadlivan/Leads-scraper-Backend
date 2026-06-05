@@ -2,8 +2,7 @@
 // ─── Indeed Scraper via RSS Feed ──────────────────────────────────────────────
 // Uses Indeed's public RSS feed — no blocking, no CAPTCHA
 
-import { getIndeedSubdomain, getLocationSearchString } from "../../../Job portal frontend/shared/config/LocationConfig.ts";
-
+import { getIndeedSubdomain, getLocationSearchString } from "../config/LocationConfig.ts";
 export async function scrapeIndeed(page, query, locationObj, maxPages = 2) {
     const leads = [];
 
