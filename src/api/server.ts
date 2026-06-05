@@ -170,20 +170,20 @@ async function bootstrap(): Promise<void> {
     console.warn("    Continuing — DB-dependent routes will return 500 until MongoDB is available.");
   }
 
-  // ── 2. Redis (FATAL if unreachable) ────────────────────────────────────────
+  // ── 2. Redis (warn if unreachable — don't hard-crash on missing config) ──────
   const redisCfg = resolveRedisConfig();
   console.log(`  ↳ Redis target: ${redisCfg.displayHost}`);
+  let redisAvailable = false;
   try {
-    // validateRedisConnection throws with a full description if Redis is down
     await validateRedisConnection(8_000);
+    redisAvailable = true;
     console.log("  ✓ Redis Connected");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`\n  ✗ Redis connection FAILED — cannot start without Redis.\n`);
-    console.error(message);
-    console.error(`\n  Fix: ensure Redis is running on ${redisCfg.displayHost}`);
-    console.error("        or set REDIS_URL / REDIS_HOST / REDIS_PASSWORD in .env\n");
-    process.exit(1); // Hard stop — queue is non-functional without Redis
+    console.warn(`\n  ⚠ Redis unavailable — queue features disabled.`);
+    console.warn(`    ${message}`);
+    console.warn(`    Set REDIS_URL in Render environment variables to enable scrape jobs.\n`);
+    // Server continues — health endpoint and read-only routes still work
   }
 
   // ── 3. Queue ───────────────────────────────────────────────────────────────

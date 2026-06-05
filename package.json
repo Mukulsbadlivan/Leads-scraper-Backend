@@ -2,12 +2,11 @@
   "name": "icp-lead-intelligence",
   "version": "1.0.0",
   "description": "Job Portal Scraper & ICP Lead Intelligence",
-  "main": "src/Orchastrater.ts",
+  "main": "src/api/server.ts",
   "type": "module",
   "scripts": {
-    "start": "tsx -r dotenv/config src/Orchastrater.ts",
-    "start:no-api": "tsx src/Orchastrater.ts",
-    "api": "tsx -r dotenv/config src/api/server.ts",
+    "start": "tsx -r dotenv/config src/api/server.ts",
+    "start:orchestrator": "tsx -r dotenv/config src/Orchastrater.ts",
     "worker": "tsx -r dotenv/config src/workers/scrapeWorker.ts",
     "typecheck": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"

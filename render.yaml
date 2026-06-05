@@ -1,21 +1,15 @@
 # render.yaml — Render deployment configuration
 # https://render.com/docs/render-yaml-reference
 #
-# This file locks in the correct build/start settings so the service
-# never needs to be reconfigured manually in the Render dashboard.
-#
-# IMPORTANT: Root Directory must be BLANK (repo root).
-# The double-src path error (/opt/render/project/src/src/...) is caused
-# by Render Dashboard > Settings > Root Directory being set to "src".
-# This file enforces the correct repo root.
+# IMPORTANT: Root Directory must be BLANK (empty) in the Render dashboard.
+# The "src/src" double-path error is caused by Root Directory being set to "src".
 
 services:
   - type: web
     name: Leads-scraper-Backend
     runtime: node
-    # rootDir is intentionally omitted — Render will use the repository root.
-    # If you previously set Root Directory to "src" in the dashboard, clear it.
-    buildCommand: npm install
+    # rootDir intentionally omitted — uses repository root
+    buildCommand: npm install && npx playwright install chromium
     startCommand: npm start
     envVars:
       - key: NODE_ENV
