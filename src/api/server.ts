@@ -30,7 +30,7 @@ import { ensureLogIndexes, logger } from "../logging/logger.ts";
 // ─── App Setup ────────────────────────────────────────────────────────────────
 
 const app = express();
-const PORT = parseInt(process.env.API_PORT || process.env.PORT || "3000", 10);
+const PORT = Number(process.env.PORT || process.env.API_PORT || "3000");
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -199,8 +199,8 @@ async function bootstrap(): Promise<void> {
   console.log(LINE);
 
   // ── 4. HTTP Server ─────────────────────────────────────────────────────────
-  const server = app.listen(PORT, () => {
-    console.log(`\n  API server listening on http://localhost:${PORT}`);
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n  API server listening on http://0.0.0.0:${PORT}`);
     console.log(`  CORS origins:      ${ALLOWED_ORIGINS.join(", ")}`);
     console.log(`\n  Endpoints:`);
     console.log(`    POST  /api/scraper/start`);
