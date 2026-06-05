@@ -20,8 +20,7 @@ import { ObjectId } from "mongodb";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getLocationSearchString } from "../../Job portal frontend/shared/config/LocationConfig.ts";
-
+import { getLocationSearchString } from "./config/LocationConfig.ts";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Types ───────────────────────────────────────────────────────────────────
