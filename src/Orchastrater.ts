@@ -1,6 +1,7 @@
 // @ts-nocheck
 import "dotenv/config";
 import { chromium } from "playwright";
+import { getOutputDir } from "./utils/pathResolver.ts";
 import { scrapeIndeed } from "./scrapers/Indeedscraper.ts";
 import { scrapeGlassdoor } from "./scrapers/glassdoorscraper.ts";
 import { scrapeUpwork } from "./scrapers/upworkScraper.ts";
@@ -62,7 +63,9 @@ export type ProgressCallback = (update: {
 
 function getProcessedCompanies(filename) {
   const csvFilename = filename.replace(/\.json$/i, "") + (filename.endsWith(".csv") ? "" : ".csv");
-  const outputPath = path.resolve(__dirname, "..", "data", csvFilename);
+  const outputDir = getOutputDir();
+  fs.mkdirSync(outputDir, { recursive: true });
+  const outputPath = path.join(outputDir, csvFilename);
   if (!fs.existsSync(outputPath)) return new Set();
 
   try {

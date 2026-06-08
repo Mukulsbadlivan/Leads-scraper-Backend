@@ -6,6 +6,7 @@ import { findWebsite } from './utils/websiteFinder.ts';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getOutputDir } from './utils/pathResolver.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -209,7 +210,9 @@ const ukTechCompanies = [
 const pipeline = new PrecisionLeadSystem();
 pipeline.run(ukTechCompanies).then(data => {
     const output = JSON.stringify(data, null, 2);
-    const outputPath = path.resolve(__dirname, '..', 'data', 'uk_tech_leads.json');
+    const outputDir = getOutputDir();
+    fs.mkdirSync(outputDir, { recursive: true });
+    const outputPath = path.join(outputDir, 'uk_tech_leads.json');
     fs.writeFileSync(outputPath, output);
     console.log(`\n[Done] Extracted ${data.length} high-precision leads to ${outputPath}`);
 }).catch(err => {

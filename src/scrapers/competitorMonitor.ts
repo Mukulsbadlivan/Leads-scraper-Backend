@@ -15,6 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { ddgGet, jitter } from "./linkedinScraper.ts";
 import { scrapeIndeed }   from "./Indeedscraper.ts";
+import { getOutputDir } from "../utils/pathResolver.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -228,7 +229,9 @@ function escapeCSV(value) {
 
 function saveCompetitorCSV(data, outputFile) {
     try {
-        const filePath   = path.resolve(__dirname, "..", "..", "data", outputFile);
+        const outputDir  = getOutputDir();
+        fs.mkdirSync(outputDir, { recursive: true });
+        const filePath   = path.join(outputDir, outputFile);
         const fileExists = fs.existsSync(filePath);
         const header     = COMPETITOR_COLUMNS.join(",") + "\n";
         const rows = data.map(row =>

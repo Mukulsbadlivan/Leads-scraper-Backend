@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { ObjectId } from "mongodb";
 import { upsertLead } from "../database/repositories/LeadRepository.js";
+import { getOutputDir } from "./pathResolver.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -93,7 +94,8 @@ export async function appendLeadToCSV(
     scrapeRunId?: ObjectId
 ): Promise<void> {
     const csvFilename = filename.replace(/\.json$/i, "") + (filename.endsWith(".csv") ? "" : ".csv");
-    const outputPath = path.resolve(__dirname, "..", "..", "data", csvFilename);
+    const outputDir = getOutputDir();
+    const outputPath = path.join(outputDir, csvFilename);
 
     const flatLead = flattenLead(lead);
     const row = CSV_COLUMNS.map(col => escapeCSV(flatLead[col], col)).join(",");
@@ -101,6 +103,7 @@ export async function appendLeadToCSV(
 
     // ── CSV write ─────────────────────────────────────────────────────────────
     try {
+        fs.mkdirSync(outputDir, { recursive: true });
         if (!fs.existsSync(outputPath)) {
             fs.writeFileSync(outputPath, CSV_COLUMNS.join(",") + "\n", "utf-8");
         }
@@ -138,7 +141,8 @@ export async function saveResults(
     scrapeRunId?: ObjectId
 ): Promise<string> {
     const csvFilename = filename.replace(/\.json$/i, "") + (filename.endsWith(".csv") ? "" : ".csv");
-    const outputPath  = path.resolve(__dirname, "..", "..", "data", csvFilename);
+    const outputDir = getOutputDir();
+    const outputPath = path.join(outputDir, csvFilename);
 
     const header = CSV_COLUMNS.join(",");
     const rows   = leads.map(lead => {
@@ -146,6 +150,7 @@ export async function saveResults(
         return CSV_COLUMNS.map(col => escapeCSV(flat[col], col)).join(",");
     });
 
+    fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(outputPath, [header, ...rows].join("\n"), "utf-8");
 
     // ── MongoDB bulk upsert ───────────────────────────────────────────────────
