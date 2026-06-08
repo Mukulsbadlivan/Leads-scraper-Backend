@@ -16,3 +16,18 @@ services:
         value: production
       - key: NODE_VERSION
         value: 20.11.0
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+
+  - type: worker
+    name: Leads-scraper-Worker
+    runtime: node
+    buildCommand: npm install && npx playwright install chromium
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
