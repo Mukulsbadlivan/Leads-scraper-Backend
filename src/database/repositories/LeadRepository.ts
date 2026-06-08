@@ -340,3 +340,100 @@ export async function countLeadsByTier(
   }
   return counts;
 }
+
+/** Count leads matching filters. */
+export async function countLeads(
+  filter: Filter<LeadDocument> = {}
+): Promise<number> {
+  const c = await col();
+  return c.countDocuments(filter);
+}
+
+/** Retrieve leads matching filters with pagination and ICP score sorting. */
+export async function listLeadsPaginated(
+  page = 1,
+  limit = 25,
+  filter: Filter<LeadDocument> = {}
+): Promise<LeadDocument[]> {
+  const c = await col();
+  const skip = (page - 1) * limit;
+  return c.find(filter).sort({ icpScore: -1 }).skip(skip).limit(limit).toArray();
+}
+
+/** Retrieve geographic distribution of leads. */
+export async function getLeadsByRegion(): Promise<{ name: string; value: number }[]> {
+  const c = await col();
+  return c.aggregate<{ name: string; value: number }>([
+    { $match: { country: { $nin: [null, ""] } } },
+    { $group: { _id: "$country", value: { $sum: 1 } } },
+    { $project: { _id: 0, name: "$_id", value: 1 } },
+    { $sort: { value: -1 } },
+    { $limit: 10 }
+  ]).toArray();
+}
+
+/** Retrieve sector distribution of leads. */
+export async function getLeadsBySector(): Promise<{ name: string; value: number }[]> {
+  const c = await col();
+  return c.aggregate<{ name: string; value: number }>([
+    { $match: { sector: { $nin: [null, ""] } } },
+    { $group: { _id: "$sector", value: { $sum: 1 } } },
+    { $project: { _id: 0, name: "$_id", value: 1 } },
+    { $sort: { value: -1 } },
+    { $limit: 10 }
+  ]).toArray();
+}
+
+/** Retrieve leads count grouped by ICP tier. */
+export async function getLeadsByTier(): Promise<{ name: string; value: number }[]> {
+  const c = await col();
+  return c.aggregate<{ name: string; value: number }>([
+    { $match: { icpTier: { $ne: null } } },
+    { $group: { _id: "$icpTier", value: { $sum: 1 } } },
+    { $project: { _id: 0, name: "$_id", value: 1 } },
+    { $sort: { value: -1 } }
+  ]).toArray();
+}
+
+/** Retrieve email and phone discovery rates. */
+export async function getLeadDiscoveryRates(): Promise<{
+  total: number;
+  withEmail: number;
+  withPhone: number;
+  withBoth: number;
+  emailRate: number;
+  phoneRate: number;
+  bothRate: number;
+}> {
+  const c = await col();
+  const total = await c.countDocuments({});
+  if (total === 0) {
+    return { total: 0, withEmail: 0, withPhone: 0, withBoth: 0, emailRate: 0, phoneRate: 0, bothRate: 0 };
+  }
+
+  const withEmail = await c.countDocuments({ email: { $nin: [null, ""] } });
+  const withPhone = await c.countDocuments({ phoneNumber: { $nin: [null, ""] } });
+  const withBoth = await c.countDocuments({
+    email: { $nin: [null, ""] },
+    phoneNumber: { $nin: [null, ""] }
+  });
+
+  return {
+    total,
+    withEmail,
+    withPhone,
+    withBoth,
+    emailRate: Math.round((withEmail / total) * 1000) / 10,
+    phoneRate: Math.round((withPhone / total) * 1000) / 10,
+    bothRate: Math.round((withBoth / total) * 1000) / 10
+  };
+}
+
+/** Find all leads belonging to a company. */
+export async function findLeadsByCompany(companyId: ObjectId): Promise<LeadDocument[]> {
+  const c = await col();
+  return c.find({ companyId }).sort({ icpScore: -1 }).toArray();
+}
+
+
+

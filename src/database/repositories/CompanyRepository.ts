@@ -135,3 +135,98 @@ export async function listCompanies(
   const c = await col();
   return c.find({}).skip(skip).limit(limit).toArray();
 }
+
+/** Count companies matching filters. */
+export async function countCompanies(
+  filter: Filter<CompanyDocument> = {}
+): Promise<number> {
+  const c = await col();
+  return c.countDocuments(filter);
+}
+
+/** Retrieve companies with aggregated jobsCount, leadsCount, and hiringScore. */
+export async function listCompaniesPaginated(
+  page = 1,
+  limit = 25,
+  filter: Filter<CompanyDocument> = {}
+): Promise<any[]> {
+  const c = await col();
+  const skip = (page - 1) * limit;
+
+  const pipeline = [
+    { $match: filter },
+    {
+      $lookup: {
+        from: "jobs",
+        localField: "_id",
+        foreignField: "companyId",
+        as: "companyJobs"
+      }
+    },
+    {
+      $lookup: {
+        from: "leads",
+        localField: "_id",
+        foreignField: "companyId",
+        as: "companyLeads"
+      }
+    },
+    {
+      $project: {
+        companyName: 1,
+        normalizedName: 1,
+        website: 1,
+        companyProfileUrl: 1,
+        websiteConfidence: 1,
+        linkedinUrl: 1,
+        linkedinCompanySlug: 1,
+        linkedinCompanyId: 1,
+        linkedinConfidence: 1,
+        linkedinFollowers: 1,
+        sector: 1,
+        industry: 1,
+        companyType: 1,
+        country: 1,
+        state: 1,
+        city: 1,
+        fundingStage: 1,
+        isB2BSaaS: 1,
+        numberOfEmployees: 1,
+        employeeSource: 1,
+        employeeSize: 1,
+        techStack: 1,
+        techStackDetailed: 1,
+        fundingInfo: 1,
+        recentFundingSignal: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        jobsCount: { $size: "$companyJobs" },
+        leadsCount: { $size: "$companyLeads" },
+        hiringScore: {
+          $cond: {
+            if: { $gt: [{ $size: "$companyLeads" }, 0] },
+            then: { $max: "$companyLeads.icpScore" },
+            else: 0
+          }
+        }
+      }
+    },
+    { $skip: skip },
+    { $limit: limit }
+  ];
+
+  return c.aggregate(pipeline).toArray();
+}
+
+/** Retrieve companies count grouped by sector. */
+export async function getCompaniesBySector(): Promise<{ name: string; value: number }[]> {
+  const c = await col();
+  return c.aggregate<{ name: string; value: number }>([
+    { $match: { sector: { $nin: [null, ""] } } },
+    { $group: { _id: "$sector", value: { $sum: 1 } } },
+    { $project: { _id: 0, name: "$_id", value: 1 } },
+    { $sort: { value: -1 } }
+  ]).toArray();
+}
+
+

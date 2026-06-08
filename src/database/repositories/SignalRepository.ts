@@ -56,3 +56,12 @@ export async function findSignalsByScrapeRun(
   const c = await col();
   return c.find({ scrapeRunId }).toArray();
 }
+
+/** Count total signals matching a filter. */
+export async function countSignals(
+  filter: Record<string, unknown> = {}
+): Promise<number> {
+  const c = await col();
+  return c.countDocuments(filter);
+}
+

@@ -260,3 +260,58 @@ export async function findActiveScrapeRun(): Promise<ScrapeRunDocument | null> {
     { sort: { startedAt: -1 } }
   );
 }
+
+/** Count active scrape runs (queued or running). */
+export async function countActiveScrapeRuns(): Promise<number> {
+  const c = await col();
+  return c.countDocuments({ status: { $in: ["queued", "running"] } });
+}
+
+/** Retrieve daily scrape activity for the last N days. */
+export async function getDailyScrapeActivity(days = 14): Promise<{ date: string; runs: number; leads: number; companies: number }[]> {
+  const c = await col();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  const results = await c.aggregate<any>([
+    { $match: { startedAt: { $gte: startDate } } },
+    {
+      $group: {
+        _id: { $dateToString: { format: "%Y-%m-%d", date: "$startedAt" } },
+        runs: { $sum: 1 },
+        leads: { $sum: { $ifNull: ["$filteredLeads", { $ifNull: ["$leadsFound", 0] }] } },
+        companies: { $sum: { $ifNull: ["$uniqueCompanies", { $ifNull: ["$companiesFound", 0] }] } }
+      }
+    },
+    { $project: { _id: 0, date: "$_id", runs: 1, leads: 1, companies: 1 } },
+    { $sort: { date: 1 } }
+  ]).toArray();
+
+  return results;
+}
+
+/** Retrieve scrape run success/failure statistics. */
+export async function getScrapeSuccessMetrics(): Promise<{
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  successRate: number;
+}> {
+  const c = await col();
+  const totalRuns = await c.countDocuments({});
+  if (totalRuns === 0) {
+    return { totalRuns: 0, successRuns: 0, failedRuns: 0, successRate: 0 };
+  }
+
+  const successRuns = await c.countDocuments({ status: "completed" });
+  const failedRuns = await c.countDocuments({ status: "failed" });
+
+  return {
+    totalRuns,
+    successRuns,
+    failedRuns,
+    successRate: Math.round((successRuns / totalRuns) * 1000) / 10
+  };
+}
+
+

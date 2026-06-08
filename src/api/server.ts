@@ -25,6 +25,7 @@ import {
 import { scrapeQueue } from "../queue/scrapeQueue.ts";
 import { scraperRouter } from "./routes/scraper.ts";
 import { dataQualityRouter } from "./routes/dataQuality.ts";
+import { dataExplorerRouter } from "./routes/dataExplorer.ts";
 import { ensureLogIndexes, logger } from "../logging/logger.ts";
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
@@ -135,6 +136,7 @@ app.get("/health", (_req: Request, res: Response) =>
 
 app.use("/api/scraper", scraperRouter);
 app.use("/api/data-quality", dataQualityRouter);
+app.use("/", dataExplorerRouter);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────
 
