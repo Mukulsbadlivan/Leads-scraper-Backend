@@ -220,7 +220,24 @@ export async function runOrchestrator(
     launchOptions.executablePath = CHROME_PATH;
   }
   // On Render (or any environment without CHROME_PATH set), Playwright will automatically locate its own installed browser.
-  const browser = await chromium.launch(launchOptions);
+  let browser;
+  try {
+    browser = await chromium.launch(launchOptions);
+  } catch (err: any) {
+    if (
+      err.message.includes("Executable doesn't exist") &&
+      !launchOptions.executablePath &&
+      !launchOptions.channel
+    ) {
+      console.warn("⚠️ Playwright browser executable not found. Falling back to system Google Chrome...");
+      browser = await chromium.launch({
+        ...launchOptions,
+        channel: "chrome",
+      });
+    } else {
+      throw err;
+    }
+  }
 
   const context = await browser.newContext({
     userAgent:

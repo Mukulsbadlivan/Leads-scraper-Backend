@@ -26,6 +26,9 @@ import { scrapeQueue } from "../queue/scrapeQueue.ts";
 import { scraperRouter } from "./routes/scraper.ts";
 import { dataQualityRouter } from "./routes/dataQuality.ts";
 import { dataExplorerRouter } from "./routes/dataExplorer.ts";
+// ── NEW: Startup Intelligence & Company News routers (isolated modules)
+import { startupRouter } from "../routes/startup/startupRouter.ts";
+import { companyNewsRouter } from "../routes/companyNews/companyNewsRouter.ts";
 import { ensureLogIndexes, logger } from "../logging/logger.ts";
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
@@ -136,6 +139,9 @@ app.get("/health", (_req: Request, res: Response) =>
 
 app.use("/api/scraper", scraperRouter);
 app.use("/api/data-quality", dataQualityRouter);
+// ── NEW: Isolated startup intelligence and company news routes
+app.use("/api/startup", startupRouter);
+app.use("/api/company-news", companyNewsRouter);
 app.use("/", dataExplorerRouter);
 
 // ─── 404 ─────────────────────────────────────────────────────────────────────

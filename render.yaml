@@ -31,3 +31,35 @@ services:
         value: 20.11.0
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
+
+  # ── NEW: Startup Intelligence Worker (isolated — does not touch existing queues)
+  - type: worker
+    name: Startup-Intelligence-Worker
+    runtime: node
+    buildCommand: npm install && npx playwright install chromium
+    startCommand: node --loader tsx/esm src/workers/startup/startupWorker.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      - key: STARTUP_WORKER_CONCURRENCY
+        value: "1"
+      - key: STARTUP_FRESHNESS_HOURS
+        value: "24"
+
+  # ── NEW: Company News Worker (isolated — does not touch existing queues)
+  - type: worker
+    name: Company-News-Worker
+    runtime: node
+    buildCommand: npm install
+    startCommand: node --loader tsx/esm src/workers/companyNews/companyNewsWorker.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: NEWS_WORKER_CONCURRENCY
+        value: "2"
