@@ -33,6 +33,9 @@ import {
 import { logger, ensureLogIndexes } from "../logging/logger.ts";
 import { startDedupWorker } from "./dedupWorker.js";
 import { enqueueDedupJob } from "../queue/dedupQueue.js";
+import { v4 as uuidv4 } from "uuid";
+import { enqueueStartupJob } from "../queue/startupQueue.ts";
+import { enqueueCompanyNewsJob } from "../queue/companyNewsQueue.ts";
 
 // ─── Worker Configuration ─────────────────────────────────────────────────────
 
@@ -168,11 +171,38 @@ async function bootstrap(): Promise<void> {
 
   worker.on("completed", async (job) => {
     console.log(`[Worker] ✅ Job ${job.id} (runId=${job.data.scrapeRunId}) completed`);
-    // Automatically trigger deduplication job after every scrape run completes
+
+    // 1. Deduplication (existing)
     try {
       await enqueueDedupJob();
     } catch (err: any) {
       console.error("[Worker] ⚠️ Failed to enqueue deduplication job:", err.message);
+    }
+
+    // 2. Startup Intelligence enrichment — automatically triggered after every scrape
+    try {
+      await enqueueStartupJob({
+        jobRunId: uuidv4(),
+        sources: ["existing_companies", "yc", "wellfound", "rss", "crunchbase"],
+        maxCompanies: 200,
+        enrichExecutives: true,
+        enrichNews: true,
+      });
+      console.log("[Worker] ✅ Startup Intelligence job enqueued after scrape completion");
+    } catch (err: any) {
+      console.error("[Worker] ⚠️ Failed to enqueue Startup Intelligence job:", err.message);
+    }
+
+    // 3. Company News collection — automatically triggered after every scrape
+    try {
+      await enqueueCompanyNewsJob({
+        jobRunId: uuidv4(),
+        sources: ["rss", "google_news", "newsapi"],
+        lookbackDays: 7,
+      });
+      console.log("[Worker] ✅ Company News job enqueued after scrape completion");
+    } catch (err: any) {
+      console.error("[Worker] ⚠️ Failed to enqueue Company News job:", err.message);
     }
   });
 
