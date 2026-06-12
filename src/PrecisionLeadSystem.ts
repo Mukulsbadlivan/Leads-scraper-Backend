@@ -20,23 +20,11 @@ class PrecisionLeadSystem {
     }
 
     async init() {
-        const launchOptions = {
+        // Always use Playwright's bundled Chromium — never system Chrome.
+        this.browser = await chromium.launch({
             headless: true,
-            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-        };
-        try {
-            this.browser = await chromium.launch(launchOptions);
-        } catch (err: any) {
-            if (err.message.includes("Executable doesn't exist")) {
-                console.warn("⚠️ Playwright browser executable not found. Falling back to system Google Chrome...");
-                this.browser = await chromium.launch({
-                    ...launchOptions,
-                    channel: "chrome"
-                });
-            } else {
-                throw err;
-            }
-        }
+            args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        });
     }
 
     async close() {

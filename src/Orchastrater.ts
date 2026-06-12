@@ -211,33 +211,12 @@ export async function runOrchestrator(
 
   await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
 
-  const CHROME_PATH = process.env.CHROME_PATH;
-  const launchOptions: Parameters<typeof chromium.launch>[0] = {
-    headless: CONFIG.headless,
+  // Always use Playwright's bundled Chromium — never system Chrome.
+  // PLAYWRIGHT_BROWSERS_PATH=0 in render.yaml points to the build-installed browser.
+  const browser = await chromium.launch({
+    headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  };
-  if (CHROME_PATH) {
-    launchOptions.executablePath = CHROME_PATH;
-  }
-  // On Render (or any environment without CHROME_PATH set), Playwright will automatically locate its own installed browser.
-  let browser;
-  try {
-    browser = await chromium.launch(launchOptions);
-  } catch (err: any) {
-    if (
-      err.message.includes("Executable doesn't exist") &&
-      !launchOptions.executablePath &&
-      !launchOptions.channel
-    ) {
-      console.warn("⚠️ Playwright browser executable not found. Falling back to system Google Chrome...");
-      browser = await chromium.launch({
-        ...launchOptions,
-        channel: "chrome",
-      });
-    } else {
-      throw err;
-    }
-  }
+  });
 
   const context = await browser.newContext({
     userAgent:
