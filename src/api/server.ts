@@ -17,8 +17,22 @@ import "dotenv/config";
 
 if (process.env.RENDER) {
   process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
-  console.log(`[Render] Force setting PLAYWRIGHT_BROWSERS_PATH = ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
 }
+
+console.log(
+  "[Render Diagnostic] PLAYWRIGHT_BROWSERS_PATH =",
+  process.env.PLAYWRIGHT_BROWSERS_PATH
+);
+
+console.log(
+  "[Render Diagnostic] RENDER =",
+  process.env.RENDER
+);
+
+console.log(
+  "[Render Diagnostic] NODE_ENV =",
+  process.env.NODE_ENV
+);
 
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
