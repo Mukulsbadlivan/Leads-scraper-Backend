@@ -12,7 +12,7 @@ services:
     name: Leads-scraper-Backend
     runtime: node
     # rootDir intentionally omitted — uses repository root
-    buildCommand: npm install && npx playwright install --with-deps chromium
+    buildCommand: npm install && npx playwright install chromium
     startCommand: npm start
     envVars:
       - key: NODE_ENV
