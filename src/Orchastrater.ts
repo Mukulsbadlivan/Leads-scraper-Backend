@@ -212,7 +212,9 @@ export async function runOrchestrator(
   await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
 
   // Always use Playwright's bundled Chromium — never system Chrome.
-  // PLAYWRIGHT_BROWSERS_PATH=0 in render.yaml points to the build-installed browser.
+  if (process.env.RENDER) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
+  }
   const browser = await chromium.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],

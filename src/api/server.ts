@@ -14,6 +14,12 @@
  * inside this process. There is no separate worker deployment required.
  */
 import "dotenv/config";
+
+if (process.env.RENDER) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
+  console.log(`[Render] Force setting PLAYWRIGHT_BROWSERS_PATH = ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+}
+
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { initDb } from "../database/initDb.ts";

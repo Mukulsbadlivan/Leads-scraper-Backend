@@ -8,7 +8,7 @@
     "start": "tsx -r dotenv/config src/api/server.ts",
     "start:orchestrator": "tsx -r dotenv/config src/Orchastrater.ts",
     "worker:standalone": "tsx -r dotenv/config src/workers/scrapeWorker.ts",
-    "build": "npx playwright install --with-deps chromium",
+    "build": "echo \"Installing Playwright Chromium...\" && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/ms-playwright npx playwright install chromium && echo \"Playwright installation complete\"",
     "typecheck": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

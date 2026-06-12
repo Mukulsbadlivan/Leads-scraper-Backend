@@ -21,6 +21,9 @@ class PrecisionLeadSystem {
 
     async init() {
         // Always use Playwright's bundled Chromium — never system Chrome.
+        if (process.env.RENDER) {
+            process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
+        }
         this.browser = await chromium.launch({
             headless: true,
             args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],

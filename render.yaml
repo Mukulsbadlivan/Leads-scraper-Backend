@@ -12,7 +12,7 @@ services:
     name: Leads-scraper-Backend
     runtime: node
     # rootDir intentionally omitted — uses repository root
-    buildCommand: npm install && npx playwright install chromium
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -20,7 +20,7 @@ services:
       - key: NODE_VERSION
         value: 20.11.0
       - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "0"
+        value: "/opt/render/project/src/ms-playwright"
 
       # ── BullMQ worker tuning ──────────────────────────────────────────────
       # Scrape worker: 1 concurrent scrape job at a time (heavy Playwright usage)
