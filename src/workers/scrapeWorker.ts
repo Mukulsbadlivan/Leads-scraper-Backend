@@ -119,6 +119,11 @@ async function processScrapeJob(job: Job<ScrapeJobPayload>): Promise<void> {
  * @returns The Worker instance (caller is responsible for .close() on shutdown).
  */
 export function startScrapeWorker(): Worker<ScrapeJobPayload> {
+  const redisUrl = (process.env.REDIS_URL || "").trim();
+  const redisDisplay = redisUrl
+    ? redisUrl.replace(/:([^@]+)@/, ":***@") // redact password
+    : `${process.env.REDIS_HOST || "localhost"}:${process.env.REDIS_PORT || "6379"}`;
+
   const worker = new Worker<ScrapeJobPayload>(
     SCRAPE_QUEUE_NAME,
     processScrapeJob,
@@ -129,6 +134,13 @@ export function startScrapeWorker(): Worker<ScrapeJobPayload> {
       maxStalledCount: 2,
     }
   );
+
+  // ── Initialization log ───────────────────────────────────────────────────────
+  console.log(`[ScrapeWorker] ✅ Initialized successfully`);
+  console.log(`[ScrapeWorker]    Queue    : ${SCRAPE_QUEUE_NAME}`);
+  console.log(`[ScrapeWorker]    Redis    : ${redisDisplay}`);
+  console.log(`[ScrapeWorker]    Concurrency: ${WORKER_CONCURRENCY}`);
+  console.log(`[ScrapeWorker]    Waiting for jobs...`);
 
   // ── Event Listeners ─────────────────────────────────────────────────────────
 
@@ -216,15 +228,30 @@ export function startScrapeWorker(): Worker<ScrapeJobPayload> {
   });
 
   worker.on("stalled", (jobId) => {
-    console.warn(`[Worker] ⚠️  Job ${jobId} stalled — will be retried`);
+    console.warn(`[ScrapeWorker] ⚠️  Job ${jobId} stalled — will be retried automatically`);
   });
 
   worker.on("error", (err) => {
-    console.error("[Worker] ❌ Worker error:", err.message);
+    console.error(`[ScrapeWorker] ❌ Worker-level error (not a job failure): ${err.message}`);
+    console.error(`[ScrapeWorker]    This may indicate a Redis connection problem.`);
   });
 
   worker.on("active", (job) => {
-    console.log(`[Worker] 🏃 Job ${job.id} started (runId=${job.data.scrapeRunId})`);
+    console.log(`[ScrapeWorker] 🏃 Job PICKED UP — jobId=${job.id} runId=${job.data.scrapeRunId} attempt=${job.attemptsMade + 1}`);
+  });
+
+  worker.on("ready", () => {
+    console.log(`[ScrapeWorker] 🟢 Worker is ready, connected to Redis, and polling for jobs`);
+  });
+
+  // Verify underlying Redis connection details
+  worker.client.then((client) => {
+    const stream = (client as any).stream;
+    const remoteAddr = stream ? `${stream.remoteAddress}:${stream.remotePort}` : "unknown";
+    const status = (client as any).status || "unknown";
+    console.log(`[ScrapeWorker] 🔌 Redis Client Status: ${status} | Connected to: ${remoteAddr}`);
+  }).catch((err) => {
+    console.error(`[ScrapeWorker] ❌ Redis Client Connection verification failed:`, err.message);
   });
 
   return worker;

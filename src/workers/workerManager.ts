@@ -47,15 +47,19 @@ export async function startAllWorkers(): Promise<() => Promise<void>> {
   console.log(LINE);
 
   const workers: Worker[] = [];
+  const failures: string[] = [];
 
-  // ── 1. Scrape Worker ────────────────────────────────────────────────────────
+  // ── 1. Scrape Worker ───────────────────────────────────────────────────────
   try {
     const w = startScrapeWorker();
     workers.push(w);
     console.log("  ✓ Scrape Worker      →  scrape-jobs");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`  ✗ Scrape Worker failed to start: ${msg}`);
+    // CRITICAL: scrape worker failure means jobs will queue but never execute
+    console.error(`  ✗ Scrape Worker FAILED TO START — ${msg}`);
+    console.error(`  ⚠ CRITICAL: Jobs will enqueue but will NOT be processed until this is fixed.`);
+    failures.push("Scrape Worker");
   }
 
   // ── 2. Dedup Worker ─────────────────────────────────────────────────────────
@@ -89,7 +93,11 @@ export async function startAllWorkers(): Promise<() => Promise<void>> {
   }
 
   console.log(LINE);
-  console.log(`  ${workers.length}/4 workers running in-process\n`);
+  console.log(`  ${workers.length}/4 workers running in-process`);
+  if (workers.length < 4) {
+    console.warn(`  ⚠ ${4 - workers.length} worker(s) failed to start — check logs above for details.`);
+  }
+  console.log();
 
   workerInstances = workers;
   started = true;
