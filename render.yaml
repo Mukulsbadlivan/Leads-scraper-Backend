@@ -3,6 +3,9 @@
 #
 # IMPORTANT: Root Directory must be BLANK (empty) in the Render dashboard.
 # The "src/src" double-path error is caused by Root Directory being set to "src".
+#
+# All BullMQ workers (scrape, dedup, startup intelligence, company news) now run
+# INSIDE the web service process. No separate Render worker services are needed.
 
 services:
   - type: web
@@ -19,47 +22,16 @@ services:
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
 
-  - type: worker
-    name: Leads-scraper-Worker
-    runtime: node
-    buildCommand: npm install && npx playwright install chromium
-    startCommand: npm run worker
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: 20.11.0
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "0"
-
-  # ── NEW: Startup Intelligence Worker (isolated — does not touch existing queues)
-  - type: worker
-    name: Startup-Intelligence-Worker
-    runtime: node
-    buildCommand: npm install && npx playwright install chromium
-    startCommand: node --loader tsx/esm src/workers/startup/startupWorker.ts
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: 20.11.0
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "0"
+      # ── BullMQ worker tuning ──────────────────────────────────────────────
+      # Scrape worker: 1 concurrent scrape job at a time (heavy Playwright usage)
+      - key: WORKER_CONCURRENCY
+        value: "1"
+      # Startup intelligence worker: 1 concurrent job (discovery + enrichment)
       - key: STARTUP_WORKER_CONCURRENCY
         value: "1"
-      - key: STARTUP_FRESHNESS_HOURS
-        value: "24"
-
-  # ── NEW: Company News Worker (isolated — does not touch existing queues)
-  - type: worker
-    name: Company-News-Worker
-    runtime: node
-    buildCommand: npm install
-    startCommand: node --loader tsx/esm src/workers/companyNews/companyNewsWorker.ts
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: 20.11.0
+      # Company news worker: 2 concurrent jobs (lightweight HTTP fetching)
       - key: NEWS_WORKER_CONCURRENCY
         value: "2"
+      # How fresh startup data must be before re-enriching (hours)
+      - key: STARTUP_FRESHNESS_HOURS
+        value: "24"

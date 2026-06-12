@@ -1,20 +1,23 @@
 /**
  * server.ts — Express API server for the ICP Lead Intelligence platform.
  *
- * Run with: npm run api
+ * Run with: npm start
  *
  * Startup sequence:
  *   1. Connect MongoDB   (fatal if unavailable)
  *   2. Connect Redis     (fatal if unavailable — queue won't work without it)
  *   3. Verify queue      (ping BullMQ scrape-jobs queue)
- *   4. Start HTTP server
+ *   4. Start BullMQ workers  (all workers run in-process — no separate Render services)
+ *   5. Start HTTP server
  *
- * Does NOT execute any scraping logic — that lives in src/workers/scrapeWorker.ts
+ * All BullMQ workers (scrape, dedup, startup intelligence, company news) run
+ * inside this process. There is no separate worker deployment required.
  */
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import { initDb } from "../database/initDb.ts";
+import { initStartupDb } from "../database/initStartupDb.ts";
 import { closeConnection } from "../database/connection.ts";
 import {
   validateRedisConnection,
@@ -26,10 +29,10 @@ import { scrapeQueue } from "../queue/scrapeQueue.ts";
 import { scraperRouter } from "./routes/scraper.ts";
 import { dataQualityRouter } from "./routes/dataQuality.ts";
 import { dataExplorerRouter } from "./routes/dataExplorer.ts";
-// ── NEW: Startup Intelligence & Company News routers (isolated modules)
 import { startupRouter } from "../routes/startup/startupRouter.ts";
 import { companyNewsRouter } from "../routes/companyNews/companyNewsRouter.ts";
 import { ensureLogIndexes, logger } from "../logging/logger.ts";
+import { startAllWorkers } from "../workers/workerManager.ts";
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -86,6 +89,7 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
  *   mongodb: "connected" | "disconnected",
  *   redis:   "connected" | "disconnected",
  *   queue:   "ready"     | "unavailable",
+ *   workers: number,      // count of in-process BullMQ workers
  *   uptime:  number,      // process uptime in seconds
  *   timestamp: string     // ISO 8601
  * }
@@ -125,6 +129,7 @@ app.get("/api/health", async (_req: Request, res: Response) => {
     mongodb: mongoStatus,
     redis: redisStatus,
     queue: queueStatus,
+    workers: 4, // scrape + dedup + startup + companyNews — all in-process
     uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });
@@ -139,7 +144,6 @@ app.get("/health", (_req: Request, res: Response) =>
 
 app.use("/api/scraper", scraperRouter);
 app.use("/api/data-quality", dataQualityRouter);
-// ── NEW: Isolated startup intelligence and company news routes
 app.use("/api/startup", startupRouter);
 app.use("/api/company-news", companyNewsRouter);
 app.use("/", dataExplorerRouter);
@@ -162,18 +166,17 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 async function bootstrap(): Promise<void> {
   const LINE = "─".repeat(50);
   console.log(`\n${LINE}`);
-  console.log("  ICP Lead Intelligence — API Server");
+  console.log("  ICP Lead Intelligence — API Server + Workers");
   console.log(LINE);
 
   // ── 1. MongoDB ─────────────────────────────────────────────────────────────
   try {
     await initDb();
+    await initStartupDb();
     await ensureLogIndexes();
-    console.log("  ✓ MongoDB Connected");
+    console.log("  ✓ MongoDB Connected  (scrape + startup indexes ready)");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    // MongoDB is not strictly required for the API to start (CSV mode works),
-    // but we surface the error clearly for ops visibility.
     console.error(`  ✗ MongoDB  — ${message}`);
     console.warn("    Continuing — DB-dependent routes will return 500 until MongoDB is available.");
   }
@@ -195,18 +198,27 @@ async function bootstrap(): Promise<void> {
   }
 
   // ── 3. Queue ───────────────────────────────────────────────────────────────
-  try {
-    await scrapeQueue.getWaitingCount(); // verifies queue can communicate with Redis
-    console.log("  ✓ Queue Ready    →  scrape-jobs");
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Queue failure after Redis connected is unexpected — log and continue
-    console.warn(`  ⚠ Queue probe failed — ${message}`);
+  if (redisAvailable) {
+    try {
+      await scrapeQueue.getWaitingCount(); // verifies queue can communicate with Redis
+      console.log("  ✓ Queue Ready    →  scrape-jobs");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`  ⚠ Queue probe failed — ${message}`);
+    }
+  }
+
+  // ── 4. BullMQ Workers (in-process) ─────────────────────────────────────────
+  let shutdownWorkers: (() => Promise<void>) | null = null;
+  if (redisAvailable) {
+    shutdownWorkers = await startAllWorkers();
+  } else {
+    console.warn("  ⚠ Skipping worker startup — Redis is unavailable.");
   }
 
   console.log(LINE);
 
-  // ── 4. HTTP Server ─────────────────────────────────────────────────────────
+  // ── 5. HTTP Server ─────────────────────────────────────────────────────────
   const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`\n  API server listening on http://0.0.0.0:${PORT}`);
     console.log(`  CORS origins:      ${ALLOWED_ORIGINS.join(", ")}`);
@@ -222,20 +234,24 @@ async function bootstrap(): Promise<void> {
     console.log();
   });
 
-  // ── 5. Graceful Shutdown ───────────────────────────────────────────────────
+  // ── 6. Graceful Shutdown ───────────────────────────────────────────────────
   async function shutdown(signal: string): Promise<void> {
     console.log(`\n[API] ${signal} received — shutting down gracefully...`);
     server.close(async () => {
+      // Close workers before closing Redis/MongoDB so in-flight jobs can finish
+      if (shutdownWorkers) {
+        await shutdownWorkers();
+      }
       await closeRedisConnection();
       await closeConnection();
       console.log("[API] Server stopped.");
       process.exit(0);
     });
-    // Force-kill if not done within 10 s
+    // Force-kill if not done within 30 s (workers may need time to finish jobs)
     setTimeout(() => {
       console.error("[API] Shutdown timed out — forcing exit.");
       process.exit(1);
-    }, 10_000).unref();
+    }, 30_000).unref();
   }
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));

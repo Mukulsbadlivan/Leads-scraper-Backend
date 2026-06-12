@@ -1,17 +1,22 @@
 /**
- * startupWorker.ts — Standalone BullMQ Worker for startup intelligence jobs.
+ * startupWorker.ts — BullMQ Worker for startup intelligence jobs.
  *
- * Runs as a completely independent process (separate Render service).
- * Manages its own MongoDB and Redis connections.
- * NEVER touches existing scrapeWorker, dedupWorker, or their queues.
+ * Exports startStartupWorker() so it can be called by workerManager.ts
+ * when the backend server boots (in-process worker mode).
  *
- * Startup: node --loader tsx/esm src/workers/startup/startupWorker.ts
+ * This module:
+ *   - Creates the BullMQ Worker for STARTUP_QUEUE_NAME
+ *   - Wires all event listeners (completed, failed, error)
+ *   - Returns the Worker instance for graceful shutdown by the caller
+ *
+ * DOES NOT:
+ *   - Connect to MongoDB or Redis (done by server.ts before this is called)
+ *   - Register SIGTERM/SIGINT handlers (owned by server.ts)
+ *   - Have a standalone entry point
  */
 import { Worker, Job } from "bullmq";
 import { createRedisConnection } from "../../queue/redis.ts";
 import { STARTUP_QUEUE_NAME, StartupJobPayload } from "../../queue/startupQueue.ts";
-import { getDb } from "../../database/connection.ts";
-import { initStartupDb } from "../../database/initStartupDb.ts";
 import { runStartupDiscovery } from "../../services/startup/StartupDiscovery.ts";
 import { enrichStartupBatch } from "../../services/startup/StartupEnricher.ts";
 import { scoreAndSaveStartupLead } from "../../services/startup/StartupScorer.ts";
@@ -112,15 +117,17 @@ async function processStartupJob(job: Job<StartupJobPayload>): Promise<void> {
   );
 }
 
-// ─── Worker Lifecycle ──────────────────────────────────────────────────────────
+// ─── Worker Factory ───────────────────────────────────────────────────────────
 
-async function main() {
-  console.log(`🚀 Startup Intelligence Worker starting (concurrency=${CONCURRENCY})`);
-
-  // Initialize DB and indexes
-  await getDb();
-  await initStartupDb();
-
+/**
+ * Creates and starts the BullMQ startup intelligence worker.
+ *
+ * Called by workerManager.startAllWorkers() during server bootstrap.
+ * MongoDB and Redis must already be connected before calling this.
+ *
+ * @returns The Worker instance (caller is responsible for .close() on shutdown).
+ */
+export function startStartupWorker(): Worker<StartupJobPayload> {
   const worker = new Worker<StartupJobPayload>(
     STARTUP_QUEUE_NAME,
     processStartupJob,
@@ -142,20 +149,5 @@ async function main() {
     console.error(`[StartupWorker] Worker error: ${err.message}`);
   });
 
-  // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    console.log(`[StartupWorker] ${signal} received — closing worker...`);
-    await worker.close();
-    process.exit(0);
-  };
-
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
-
-  console.log(`✅ Startup Intelligence Worker ready — listening on queue: ${STARTUP_QUEUE_NAME}`);
+  return worker;
 }
-
-main().catch((err) => {
-  console.error("[StartupWorker] Fatal startup error:", err);
-  process.exit(1);
-});

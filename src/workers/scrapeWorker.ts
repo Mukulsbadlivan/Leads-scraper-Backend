@@ -1,38 +1,33 @@
 /**
  * scrapeWorker.ts — BullMQ Worker for the "scrape-jobs" queue.
  *
- * Run with: npm run worker
+ * Exports startScrapeWorker() so it can be called by workerManager.ts
+ * when the backend server boots (in-process worker mode).
  *
- * This process:
- *   1. Connects to Redis and MongoDB
- *   2. Picks up jobs from the "scrape-jobs" queue
- *   3. Calls runOrchestrator() with the job payload
- *   4. Emits progress updates to MongoDB via updateScrapeRunProgress()
- *   5. On all retries exhausted → moves job to "failed-scrape-jobs" DLQ
- *   6. Logs all lifecycle events to MongoDB and console
+ * This module:
+ *   - Creates the BullMQ Worker for SCRAPE_QUEUE_NAME
+ *   - Wires all event listeners (completed, failed, stalled, error, active)
+ *   - Returns the Worker instance for graceful shutdown by the caller
+ *
+ * DOES NOT:
+ *   - Connect to MongoDB or Redis (done by server.ts before this is called)
+ *   - Register SIGTERM/SIGINT handlers (owned by server.ts)
+ *   - Have a standalone entry point (use npm run worker:dev for isolated local use)
  */
-import "dotenv/config";
 import { Worker, Job } from "bullmq";
 import { ObjectId } from "mongodb";
-import {
-  createRedisConnection,
-  closeRedisConnection,
-  validateRedisConnection,
-  resolveRedisConfig,
-} from "../queue/redis.ts";
+import { createRedisConnection } from "../queue/redis.ts";
 import { SCRAPE_QUEUE_NAME, ScrapeJobPayload } from "../queue/scrapeQueue.ts";
 import { sendToDeadLetterQueue } from "../queue/failedQueue.ts";
 import { runOrchestrator } from "../Orchastrater.ts";
-import { initDb } from "../database/initDb.ts";
-import { closeConnection } from "../database/connection.ts";
 import {
   markRunning,
   updateScrapeRunProgress,
   failScrapeRun,
 } from "../database/repositories/ScrapeRunRepository.ts";
-import { logger, ensureLogIndexes } from "../logging/logger.ts";
-import { startDedupWorker } from "./dedupWorker.js";
-import { enqueueDedupJob } from "../queue/dedupQueue.js";
+import { logger } from "../logging/logger.ts";
+import { startDedupWorker } from "./dedupWorker.ts";
+import { enqueueDedupJob } from "../queue/dedupQueue.ts";
 import { v4 as uuidv4 } from "uuid";
 import { enqueueStartupJob } from "../queue/startupQueue.ts";
 import { enqueueCompanyNewsJob } from "../queue/companyNewsQueue.ts";
@@ -110,43 +105,20 @@ async function processScrapeJob(job: Job<ScrapeJobPayload>): Promise<void> {
   console.log(`[Worker] ✅ Job ${job.id} completed → ${result.totalLeads} leads`);
 }
 
-// ─── Bootstrap ────────────────────────────────────────────────────────────────
+// ─── Worker Factory ───────────────────────────────────────────────────────────
 
-async function bootstrap(): Promise<void> {
-  const LINE = "─".repeat(50);
-  console.log(`\n${LINE}`);
-  console.log("  ICP Lead Intelligence — BullMQ Worker");
-  console.log(LINE);
-
-  // ── 1. MongoDB ──────────────────────────────────────────────────────────────
-  try {
-    await initDb();
-    await ensureLogIndexes();
-    console.log("  ✓ MongoDB Connected");
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`  ✗ MongoDB  — ${message}`);
-    console.warn("    Continuing — progress won't be persisted but jobs will run.");
-  }
-
-  await logger.workerStarted();
-
-  // ── 2. Redis (FATAL if unreachable) ─────────────────────────────────────────
-  const redisCfg = resolveRedisConfig();
-  console.log(`  ↳ Redis target: ${redisCfg.displayHost}`);
-  try {
-    await validateRedisConnection(8_000);
-    console.log("  ✓ Redis Connected");
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`\n  ✗ Redis connection FAILED — cannot start without Redis.\n`);
-    console.error(message);
-    console.error(`\n  Fix: ensure Redis is running on ${redisCfg.displayHost}`);
-    console.error("        or set REDIS_URL / REDIS_HOST / REDIS_PASSWORD in .env\n");
-    process.exit(1);
-  }
-
-  // ── 3. Create BullMQ Worker ──────────────────────────────────────────────────
+/**
+ * Creates and starts the BullMQ scrape worker.
+ *
+ * Called by workerManager.startAllWorkers() during server bootstrap.
+ * MongoDB and Redis must already be connected before calling this.
+ *
+ * The dedup worker is intentionally NOT started here — workerManager
+ * starts it separately to avoid duplicate instances.
+ *
+ * @returns The Worker instance (caller is responsible for .close() on shutdown).
+ */
+export function startScrapeWorker(): Worker<ScrapeJobPayload> {
   const worker = new Worker<ScrapeJobPayload>(
     SCRAPE_QUEUE_NAME,
     processScrapeJob,
@@ -158,28 +130,19 @@ async function bootstrap(): Promise<void> {
     }
   );
 
-  console.log(`  ✓ Queue Ready    →  ${SCRAPE_QUEUE_NAME} (concurrency=${WORKER_CONCURRENCY})`);
-  
-  let dedupWorker: any = null;
-  try {
-    dedupWorker = startDedupWorker();
-  } catch (err: any) {
-    console.warn("  ⚠ Failed to start Deduplication Worker:", err.message);
-  }
-
-  console.log(LINE);
+  // ── Event Listeners ─────────────────────────────────────────────────────────
 
   worker.on("completed", async (job) => {
     console.log(`[Worker] ✅ Job ${job.id} (runId=${job.data.scrapeRunId}) completed`);
 
-    // 1. Deduplication (existing)
+    // 1. Deduplication — triggered after every scrape
     try {
       await enqueueDedupJob();
     } catch (err: any) {
       console.error("[Worker] ⚠️ Failed to enqueue deduplication job:", err.message);
     }
 
-    // 2. Startup Intelligence enrichment — automatically triggered after every scrape
+    // 2. Startup Intelligence enrichment — triggered after every scrape
     try {
       await enqueueStartupJob({
         jobRunId: uuidv4(),
@@ -193,7 +156,7 @@ async function bootstrap(): Promise<void> {
       console.error("[Worker] ⚠️ Failed to enqueue Startup Intelligence job:", err.message);
     }
 
-    // 3. Company News collection — automatically triggered after every scrape
+    // 3. Company News collection — triggered after every scrape
     try {
       await enqueueCompanyNewsJob({
         jobRunId: uuidv4(),
@@ -264,27 +227,9 @@ async function bootstrap(): Promise<void> {
     console.log(`[Worker] 🏃 Job ${job.id} started (runId=${job.data.scrapeRunId})`);
   });
 
-  console.log(`\n  Waiting for jobs... (Ctrl+C to stop)\n`);
-
-  // ── Graceful shutdown ──────────────────────────────────────────────────────
-  async function shutdown(signal: string): Promise<void> {
-    console.log(`\n[Worker] 📨 Received ${signal} — gracefully shutting down...`);
-    await logger.workerStopped();
-    if (dedupWorker) {
-      await dedupWorker.close().catch(() => {});
-    }
-    await worker.close();
-    await closeRedisConnection();
-    await closeConnection();
-    console.log("[Worker] 👋 Worker stopped.");
-    process.exit(0);
-  }
-
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  return worker;
 }
 
-bootstrap().catch((err) => {
-  console.error("[Worker] 💥 Fatal bootstrap error:", err);
-  process.exit(1);
-});
+// ─── Legacy re-export for startDedupWorker ────────────────────────────────────
+// Keep this so any existing imports from scrapeWorker still resolve.
+export { startDedupWorker };
