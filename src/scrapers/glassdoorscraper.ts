@@ -15,7 +15,12 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🔗 Trying LinkedIn Jobs RSS...`);
     try {
         const linkedinUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r604800`;
-        await page.goto(linkedinUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await Promise.race([
+            page.goto(linkedinUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("LinkedIn Jobs page.goto timeout (30s)")), 30000)
+            )
+        ]);
         await page.waitForTimeout(3000);
 
         const linkedinLeads = await page.evaluate(() => {
@@ -56,7 +61,12 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🌐 Trying Remotive API...`);
     try {
         const remotiveUrl = `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=50`;
-        await page.goto(remotiveUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await Promise.race([
+            page.goto(remotiveUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Remotive API page.goto timeout (30s)")), 30000)
+            )
+        ]);
         await page.waitForTimeout(1500);
 
         const bodyText = await page.evaluate(() => document.body.innerText);
@@ -87,7 +97,12 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🌐 Trying Arbeitnow API...`);
     try {
         const arbeitnowUrl = `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(query)}`;
-        await page.goto(arbeitnowUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await Promise.race([
+            page.goto(arbeitnowUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Arbeitnow API page.goto timeout (30s)")), 30000)
+            )
+        ]);
         await page.waitForTimeout(1500);
 
         const bodyText2 = await page.evaluate(() => document.body.innerText);

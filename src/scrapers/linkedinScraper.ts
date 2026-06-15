@@ -42,10 +42,15 @@ export async function scrapeLinkedIn(companyName, browser = null, locationObj = 
             // Intercept images/fonts to speed up
             await page.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}", r => r.abort());
 
-            await page.goto(`${linkedinUrl}/about`, {
-                waitUntil: "domcontentloaded",
-                timeout: 15000,
-            });
+            await Promise.race([
+                page.goto(`${linkedinUrl}/about`, {
+                    waitUntil: "domcontentloaded",
+                    timeout: 15000,
+                }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("LinkedIn company page.goto timeout (15s)")), 15000)
+                )
+            ]);
 
             await page.waitForTimeout(2000 + Math.random() * 1500);
 

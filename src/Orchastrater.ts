@@ -149,15 +149,24 @@ async function runPortalScrape(
   locationObj: object,
   maxPages: number
 ): Promise<any[]> {
+  console.log(`[TRACE] Starting ${portal.toUpperCase()} | "${query}" in ${loc}`);
+  const tStart = Date.now();
   const t = perfStart(`Portal Scraping [${portal.toUpperCase()} | ${query}]`);
   let page;
   try {
-    const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      viewport: { width: 1280, height: 800 },
-    });
-    page = await context.newPage();
+    const context = await Promise.race([
+      browser.newContext({
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        viewport: { width: 1280, height: 800 },
+      }),
+      new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`newContext timeout (20s) for ${portal}`)), 20000))
+    ]);
+    
+    page = await Promise.race([
+      context.newPage(),
+      new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`newPage timeout (20s) for ${portal}`)), 20000))
+    ]);
 
     console.log(`\n🔍 Scraping ${portal.toUpperCase()} | 🔎 "${query}" in ${loc}...`);
 
@@ -187,6 +196,7 @@ async function runPortalScrape(
       } catch { /* ignore */ }
     }
     perfEnd(t);
+    console.log(`[TRACE] ${portal.toUpperCase()} completed in ${Date.now() - tStart}ms`);
   }
 }
 
@@ -205,6 +215,7 @@ export async function runOrchestrator(
   params: OrchestratorParams = {},
   onProgress?: ProgressCallback
 ): Promise<OrchestratorResult> {
+  console.log("[TRACE] Entering runOrchestrator");
   const SCRAPE_COUNTRY = params.country ?? "United States";
   const SCRAPE_STATE = params.state ?? "California";
   const SCRAPE_CITY = params.city ?? "San Francisco";
@@ -274,6 +285,8 @@ export async function runOrchestrator(
 
   await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
 
+  console.log("[TRACE] Starting Browser launch");
+  const tBrowserStart = Date.now();
   // Always use Playwright's bundled Chromium — never system Chrome.
   if (process.env.RENDER) {
     process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
@@ -282,11 +295,15 @@ export async function runOrchestrator(
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
+  console.log(`[TRACE] Browser launch completed in ${Date.now() - tBrowserStart}ms`);
 
   // ── Browser Pool ──────────────────────────────────────────────────────────
   // Reuse contexts across enrichment calls instead of launching new Chromium.
+  console.log("[TRACE] Starting BrowserPool.init()");
+  const tPoolStart = Date.now();
   const pool = new BrowserPool(browser);
   await pool.init();
+  console.log(`[TRACE] BrowserPool.init() completed in ${Date.now() - tPoolStart}ms`);
 
   let allRawLeads = [];
 
@@ -296,6 +313,7 @@ export async function runOrchestrator(
     // ── PARALLEL PORTAL SCRAPING ──────────────────────────────────────────────
     // All portals × queries × locations fire concurrently.
     // Promise.allSettled ensures one blocked source never stops the others.
+    console.log("[TRACE] Starting Portal Initialization");
     const tPortals = perfStart("Portal Scraping");
 
     const locationObj = {
@@ -304,6 +322,7 @@ export async function runOrchestrator(
       city: SCRAPE_CITY,
       sector: SCRAPE_SECTOR,
     };
+    console.log("[TRACE] Portal Initialization completed");
 
     // Build the full job matrix: portal × query × location
     const scrapeJobs = CONFIG.portals.flatMap((portal) =>
@@ -313,12 +332,20 @@ export async function runOrchestrator(
     );
 
     console.log(`\n⚡ Starting ${scrapeJobs.length} parallel portal scrape jobs...`);
+    console.log(`[TRACE] Starting Portal Scraping Stage (Concurrently launching ${scrapeJobs.length} scrape jobs)`);
+    const tPortalStageStart = Date.now();
 
     const portalResults = await Promise.allSettled(
       scrapeJobs.map(({ portal, query, loc }) =>
-        runPortalScrape(browser, portal, query, loc, locationObj, CONFIG.maxPages)
+        Promise.race([
+          runPortalScrape(browser, portal, query, loc, locationObj, CONFIG.maxPages),
+          new Promise<any[]>((_, reject) =>
+            setTimeout(() => reject(new Error(`Portal scraping timeout (90s) for ${portal} | ${query} | ${loc}`)), 90000)
+          )
+        ])
       )
     );
+    console.log(`[TRACE] Portal Scraping Stage completed in ${Date.now() - tPortalStageStart}ms`);
 
     let portalIdx = 0;
     for (const result of portalResults) {

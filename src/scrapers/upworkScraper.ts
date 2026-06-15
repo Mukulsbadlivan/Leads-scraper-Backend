@@ -15,7 +15,12 @@ export async function scrapeUpwork(page, query, locationObj, maxPages = 1) {
     console.log(`    📄 Upwork RSS feed: ${rssUrl}`);
 
     try {
-        await page.goto(rssUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await Promise.race([
+            page.goto(rssUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Upwork RSS page.goto timeout (30s)")), 30000)
+            )
+        ]);
         await page.waitForTimeout(2000);
 
         const content = await page.content();

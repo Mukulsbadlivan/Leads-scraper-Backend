@@ -546,15 +546,34 @@ async function fetchHtmlSmart(url, timeoutMs = 20000, browser = null) {
         try {
             let html = "";
             if (proxy) {
-                const context = await browser.newContext({ proxy: { server: proxy } });
-                const page = await context.newPage();
-                await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+                const context = await Promise.race([
+                    browser.newContext({ proxy: { server: proxy } }),
+                    new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newContext timeout")), 15000))
+                ]);
+                const page = await Promise.race([
+                    context.newPage(),
+                    new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newPage timeout")), 15000))
+                ]);
+                await Promise.race([
+                    page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
+                    )
+                ]);
                 await page.waitForTimeout(2000);
                 html = await page.content();
                 await context.close();
             } else {
-                const page = await browser.newPage();
-                await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+                const page = await Promise.race([
+                    browser.newPage(),
+                    new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newPage timeout")), 15000))
+                ]);
+                await Promise.race([
+                    page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
+                    )
+                ]);
                 await page.waitForTimeout(2000);
                 html = await page.content();
                 await page.close();

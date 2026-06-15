@@ -50,14 +50,19 @@ export class BrowserPool {
 
   private async _createContext(): Promise<void> {
     try {
-      const context = await this.browser.newContext({
-        userAgent: USER_AGENT,
-        viewport: { width: 1280, height: 800 },
-        // Block images/fonts to reduce memory and speed up page loads
-        extraHTTPHeaders: {
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      });
+      const context = await Promise.race([
+        this.browser.newContext({
+          userAgent: USER_AGENT,
+          viewport: { width: 1280, height: 800 },
+          // Block images/fonts to reduce memory and speed up page loads
+          extraHTTPHeaders: {
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        }),
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error("BrowserPool newContext timeout (15s)")), 15000)
+        )
+      ]);
       // Abort image/font/media requests to conserve memory
       await context.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,otf,mp4,mp3}", (route) =>
         route.abort()
@@ -68,11 +73,10 @@ export class BrowserPool {
     }
   }
 
-  /**
-   * Acquire a free browser context.
-   * Blocks until one becomes available.
-   */
-  async acquire(): Promise<BrowserContext> {
+  async acquire(timeoutMs = 30000): Promise<BrowserContext> {
+    if (this.pool.length === 0) {
+      throw new Error("[BrowserPool] Cannot acquire context: Pool is empty or failed to initialize.");
+    }
     // Look for a free context in the pool
     const entry = this.pool.find((e) => !e.inUse);
     if (entry) {
@@ -83,8 +87,22 @@ export class BrowserPool {
 
     // All contexts are busy — wait for one to be released
     console.log(`[BrowserPool] ⏳ All contexts busy, waiting... (${this._usedCount()}/${this.pool.length})`);
-    return new Promise<BrowserContext>((resolve) => {
-      this.waiters.push(resolve);
+    return new Promise<BrowserContext>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Remove from waiters list to prevent leak
+        const idx = this.waiters.indexOf(resolve);
+        if (idx !== -1) {
+          this.waiters.splice(idx, 1);
+        }
+        reject(new Error(`[BrowserPool] Timeout waiting for browser context (${timeoutMs}ms)`));
+      }, timeoutMs);
+
+      const wrappedResolve = (ctx: BrowserContext) => {
+        clearTimeout(timer);
+        resolve(ctx);
+      };
+
+      this.waiters.push(wrappedResolve);
     });
   }
 
