@@ -546,24 +546,26 @@ async function findLeadershipProfiles(companyName = "") {
     const empty = { ceoName: "", cfoName: "", ctoName: "", cooName: "" };
     if (!companyName) return empty;
 
-    // In public mode, only search for critical roles (CEO, CTO) to prevent DDG rate blocks and speed up runs.
-    const isPublicMode = !process.env.GEEKFLARE_API_KEY;
-    const roles = isPublicMode
-        ? [
-            { key: "ceoName", title: "CEO" },
-            { key: "ctoName", title: "CTO" },
-          ]
-        : [
-            { key: "ceoName", title: "CEO" },
-            { key: "cfoName", title: "CFO" },
-            { key: "ctoName", title: "CTO" },
-            { key: "cooName", title: "COO" },
-          ];
+    const roles = [
+        { key: "ceoName", title: "CEO" },
+        { key: "cfoName", title: "CFO" },
+        { key: "ctoName", title: "CTO" },
+        { key: "cooName", title: "COO" },
+    ];
 
     const out = { ...empty };
-    for (const role of roles) {
-        out[role.key] = await findLeaderName(companyName, role.title);
-    }
+    // ── Parallel leadership discovery ─────────────────────────────────────────
+    // All roles are searched in parallel via Promise.allSettled().
+    // Previously this was a serial for-loop causing 4× Geekflare round-trips.
+    const tLeadership = perfStart(`Leadership Discovery [${companyName}]`);
+    const results = await Promise.allSettled(
+        roles.map((r) => findLeaderName(companyName, r.title))
+    );
+    perfEnd(tLeadership);
+
+    roles.forEach((r, i) => {
+        out[r.key] = results[i].status === "fulfilled" ? (results[i].value || "") : "";
+    });
     return out;
 }
 

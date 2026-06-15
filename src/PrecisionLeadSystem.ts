@@ -3,6 +3,8 @@ import { chromium } from 'playwright';
 import { enrichContact } from './enrichers/contactEnricher.ts';
 import { getRedditIntelligence } from './scrapers/redditIntelligence.ts';
 import { findWebsite } from './utils/websiteFinder.ts';
+import { perfStart, perfEnd } from './utils/perf.ts';
+import pLimit from 'p-limit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -184,12 +186,30 @@ class PrecisionLeadSystem {
 
     async run(companies) {
         await this.init();
-        const results = [];
-        
-        for (const company of companies) {
-            const result = await this.processCompany(company.name, company.website);
-            if (result) results.push(result);
-        }
+        // ── Batch parallel processing using p-limit ────────────────────────────
+        // Default: 3 concurrent companies (Render Free Tier safe)
+        const CONCURRENCY = parseInt(process.env.ENRICHMENT_CONCURRENCY || "3", 10);
+        const limit = pLimit(CONCURRENCY);
+
+        console.log(`[PrecisionLeadSystem] Processing ${companies.length} companies (concurrency=${CONCURRENCY})`);
+        const tRun = perfStart("PrecisionLeadSystem.run");
+
+        const settled = await Promise.allSettled(
+            companies.map((company) =>
+                limit(async () => {
+                    const t = perfStart(`PrecisionLeadSystem [${company.name}]`);
+                    const result = await this.processCompany(company.name, company.website);
+                    perfEnd(t);
+                    return result;
+                })
+            )
+        );
+
+        perfEnd(tRun);
+
+        const results = settled
+            .filter((r) => r.status === "fulfilled" && r.value !== null)
+            .map((r) => r.value);
 
         await this.close();
         return results;

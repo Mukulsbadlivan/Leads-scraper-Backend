@@ -31,10 +31,19 @@ import { enqueueDedupJob } from "../queue/dedupQueue.ts";
 import { v4 as uuidv4 } from "uuid";
 import { enqueueStartupJob } from "../queue/startupQueue.ts";
 import { enqueueCompanyNewsJob } from "../queue/companyNewsQueue.ts";
+import { performance } from "perf_hooks";
 
-// ─── Worker Configuration ─────────────────────────────────────────────────────
+// ─── Worker Configuration ───────────────────────────────────────────────────
 
+// WORKER_CONCURRENCY intentionally defaults to 1 for Render Free Tier stability.
+// - Each scrape job launches 1 Playwright browser + up to BROWSER_POOL_SIZE contexts.
+// - Multiple concurrent jobs on free tier (512MB RAM) causes OOM crashes.
+// - Parallelism inside each job is handled by ENRICHMENT_CONCURRENCY (p-limit).
+// - Increase ONLY on Render Standard (2GB+) or self-hosted with sufficient RAM.
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || "1", 10);
+
+// Log concurrency configuration at startup for observability
+console.log(`[ScrapeWorker] Concurrency config: WORKER_CONCURRENCY=${WORKER_CONCURRENCY} | ENRICHMENT_CONCURRENCY=${process.env.ENRICHMENT_CONCURRENCY || "3"} | BROWSER_POOL_SIZE=${process.env.BROWSER_POOL_SIZE || "2"}`);
 
 // ─── Job Processor ────────────────────────────────────────────────────────────
 

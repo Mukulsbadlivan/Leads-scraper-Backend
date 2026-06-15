@@ -8,7 +8,7 @@ import { scrapeUpwork } from "./scrapers/upworkScraper.ts";
 import { enrichLead } from "./enrichers/leadenricher.ts";
 import { scoreICP } from "./scoring/icpscorer.ts";
 import { detectIntents } from "./scoring/intentDetector.ts";
-import { saveResults, appendLeadToCSV } from "./utils/saveresult.ts";
+import { saveResults, appendLeadToCSV, flushMongoBuffer } from "./utils/saveresult.ts";
 import { initDb } from "./database/initDb.ts";
 import { getDb, closeConnection } from "./database/mongodb.ts";
 import {
@@ -22,6 +22,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getLocationSearchString } from "./config/LocationConfig.ts";
+import { BrowserPool } from "./utils/browserPool.ts";
+import { perfStart, perfEnd } from "./utils/perf.ts";
+import pLimit from "p-limit";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -131,6 +135,61 @@ const BASE_CONFIG = {
   },
 };
 
+// ─── Per-portal scraper runner ────────────────────────────────────────────────
+
+/**
+ * Run a single portal/query/location scrape job.
+ * Returns an array of raw leads (never throws — errors are caught and logged).
+ */
+async function runPortalScrape(
+  browser,
+  portal: string,
+  query: string,
+  loc: string,
+  locationObj: object,
+  maxPages: number
+): Promise<any[]> {
+  const t = perfStart(`Portal Scraping [${portal.toUpperCase()} | ${query}]`);
+  let page;
+  try {
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      viewport: { width: 1280, height: 800 },
+    });
+    page = await context.newPage();
+
+    console.log(`\n🔍 Scraping ${portal.toUpperCase()} | 🔎 "${query}" in ${loc}...`);
+
+    let leads = [];
+    if (portal === "indeed") {
+      leads = await scrapeIndeed(page, query, locationObj, maxPages);
+    } else if (portal === "glassdoor" || portal === "linkedin") {
+      leads = await scrapeGlassdoor(page, query, locationObj, maxPages);
+    } else if (portal === "upwork") {
+      leads = await scrapeUpwork(page, query, locationObj, maxPages);
+    } else if (portal === "reddit") {
+      const { scrapeReddit } = await import("./scrapers/redditIntelligence.ts");
+      leads = await scrapeReddit(page, query, locationObj, maxPages);
+    }
+
+    console.log(`  ✅ [${portal.toUpperCase()}] Found ${leads.length} raw leads`);
+    return leads;
+  } catch (err) {
+    console.error(`  ❌ Error scraping ${portal} for "${query}": ${err.message}`);
+    return [];
+  } finally {
+    if (page) {
+      try {
+        const ctx = page.context();
+        await page.close().catch(() => {});
+        await ctx.close().catch(() => {});
+      } catch { /* ignore */ }
+    }
+    perfEnd(t);
+  }
+}
+
 // ─── EXPORTED ORCHESTRATOR FUNCTION ──────────────────────────────────────────
 
 /**
@@ -153,6 +212,10 @@ export async function runOrchestrator(
   const SCRAPE_SOURCES = params.selectedSources ?? ["indeed", "glassdoor"];
   const SCRAPE_MAX_PAGES = params.maxPages ?? 3;
   const SCRAPE_KEYWORDS = params.keywords ?? [];
+
+  // ── Concurrency config (Render Free Tier safe defaults) ───────────────────
+  const ENRICHMENT_CONCURRENCY = parseInt(process.env.ENRICHMENT_CONCURRENCY || "3", 10);
+  console.log(`[Orchestrator] Enrichment concurrency: ${ENRICHMENT_CONCURRENCY} (ENRICHMENT_CONCURRENCY env)`);
 
   const CONFIG = {
     ...BASE_CONFIG,
@@ -220,70 +283,61 @@ export async function runOrchestrator(
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
 
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    viewport: { width: 1280, height: 800 },
-  });
+  // ── Browser Pool ──────────────────────────────────────────────────────────
+  // Reuse contexts across enrichment calls instead of launching new Chromium.
+  const pool = new BrowserPool(browser);
+  await pool.init();
 
   let allRawLeads = [];
 
   try {
     await emitProgress({ progress: 10, currentStage: "Connecting to Portals" });
 
-    const totalPortals = CONFIG.portals.length;
+    // ── PARALLEL PORTAL SCRAPING ──────────────────────────────────────────────
+    // All portals × queries × locations fire concurrently.
+    // Promise.allSettled ensures one blocked source never stops the others.
+    const tPortals = perfStart("Portal Scraping");
+
+    const locationObj = {
+      country: SCRAPE_COUNTRY,
+      state: SCRAPE_STATE,
+      city: SCRAPE_CITY,
+      sector: SCRAPE_SECTOR,
+    };
+
+    // Build the full job matrix: portal × query × location
+    const scrapeJobs = CONFIG.portals.flatMap((portal) =>
+      CONFIG.searchQueries.flatMap((query) =>
+        CONFIG.locations.map((loc) => ({ portal, query, loc }))
+      )
+    );
+
+    console.log(`\n⚡ Starting ${scrapeJobs.length} parallel portal scrape jobs...`);
+
+    const portalResults = await Promise.allSettled(
+      scrapeJobs.map(({ portal, query, loc }) =>
+        runPortalScrape(browser, portal, query, loc, locationObj, CONFIG.maxPages)
+      )
+    );
+
     let portalIdx = 0;
-
-    for (const portal of CONFIG.portals) {
+    for (const result of portalResults) {
       portalIdx++;
-      for (const query of CONFIG.searchQueries) {
-        for (const loc of CONFIG.locations) {
-          const page = await context.newPage();
-          console.log(`\n🔍 Scraping ${portal.toUpperCase()} | 🔎 "${query}" in ${loc}...`);
-
-          await emitProgress({
-            progress: 10 + Math.round((portalIdx / totalPortals) * 40),
-            currentStage: "Scraping Job Portals",
-            currentSource: portal,
-            jobsFound: allRawLeads.length,
-          });
-
-          const locationObj = {
-            country: SCRAPE_COUNTRY,
-            state: SCRAPE_STATE,
-            city: SCRAPE_CITY,
-            sector: SCRAPE_SECTOR,
-          };
-
-          try {
-            let leads = [];
-            if (portal === "indeed") {
-              leads = await scrapeIndeed(page, query, locationObj, CONFIG.maxPages);
-            } else if (portal === "glassdoor" || portal === "linkedin") {
-              leads = await scrapeGlassdoor(page, query, locationObj, CONFIG.maxPages);
-            } else if (portal === "upwork") {
-              leads = await scrapeUpwork(page, query, locationObj, CONFIG.maxPages);
-            } else if (portal === "reddit") {
-              const { scrapeReddit } = await import("./scrapers/redditIntelligence.ts");
-              leads = await scrapeReddit(page, query, locationObj, CONFIG.maxPages);
-            }
-            console.log(`  ✅ Found ${leads.length} raw leads`);
-            allRawLeads.push(...leads);
-
-            await emitProgress({
-              progress: 10 + Math.round((portalIdx / totalPortals) * 40),
-              currentStage: "Scraping Job Portals",
-              currentSource: portal,
-              jobsFound: allRawLeads.length,
-            });
-          } catch (err) {
-            console.error(`  ❌ Error scraping ${portal} for "${query}":`, err.message);
-          }
-
-          await page.close();
-        }
+      if (result.status === "fulfilled") {
+        allRawLeads.push(...result.value);
+      } else {
+        console.error(`  ❌ Portal job ${portalIdx} failed: ${result.reason?.message}`);
       }
     }
+
+    perfEnd(tPortals);
+    console.log(`\n📊 Total raw leads collected from all portals: ${allRawLeads.length}`);
+
+    await emitProgress({
+      progress: 50,
+      currentStage: "Scraping Job Portals",
+      jobsFound: allRawLeads.length,
+    });
 
     // ── Fallback if all portals blocked ──────────────────────────────────────
     if (allRawLeads.length === 0) {
@@ -302,10 +356,14 @@ export async function runOrchestrator(
       jobsFound: allRawLeads.length,
     });
 
-    // ── Enrich + Score ────────────────────────────────────────────────────────
-    console.log("\n⚙️  Enriching and scoring leads...");
+    // ── BATCH PARALLEL ENRICHMENT ─────────────────────────────────────────────
+    // Process ENRICHMENT_CONCURRENCY companies at a time using p-limit.
+    // This prevents OOM on Render while still being 3× faster than serial.
+    console.log(`\n⚙️  Enriching and scoring ${uniqueLeads.length} leads (concurrency=${ENRICHMENT_CONCURRENCY})...`);
+
     const enrichedLeads = [];
     const processedCompanies = getProcessedCompanies(CONFIG.outputFile);
+    const tEnrichAll = perfStart("Enrichment");
 
     process.on("SIGINT", () => {
       console.log("\n🛑 Interrupted! Exiting safely...");
@@ -315,70 +373,85 @@ export async function runOrchestrator(
     const ENRICH_TIMEOUT_MS = 75_000;
     const total = uniqueLeads.length;
 
-    for (let i = 0; i < total; i++) {
-      const lead = uniqueLeads[i];
-      const companyKey = (lead.companyName || "").trim().toLowerCase();
-      if (processedCompanies.has(companyKey)) {
-        console.log(`  [${i + 1}/${total}] ${lead.companyName}... ⏭️ skipped (already processed)`);
-        continue;
-      }
-      process.stdout.write(`  [${i + 1}/${total}] ${lead.companyName}...`);
+    // p-limit enforces at most ENRICHMENT_CONCURRENCY concurrent enrichments
+    const enrichLimit = pLimit(ENRICHMENT_CONCURRENCY);
 
-      // Emit progress at ~10% increments during enrichment
-      if (i % Math.max(1, Math.floor(total / 10)) === 0) {
-        const enrichProgress = 55 + Math.round((i / total) * 35);
-        await emitProgress({
-          progress: enrichProgress,
-          currentStage: "Enriching & Scoring",
-          companiesFound: uniqueLeads.length,
-          jobsFound: allRawLeads.length,
-          leadsFound: enrichedLeads.length,
-        });
-      }
+    const enrichPromises = uniqueLeads.map((lead, i) =>
+      enrichLimit(async () => {
+        const companyKey = (lead.companyName || "").trim().toLowerCase();
+        if (processedCompanies.has(companyKey)) {
+          console.log(`  [${i + 1}/${total}] ${lead.companyName}... ⏭️ skipped (already processed)`);
+          return null;
+        }
 
-      try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("enrichment timeout (75s)")), ENRICH_TIMEOUT_MS)
-        );
+        process.stdout.write(`  [${i + 1}/${total}] ${lead.companyName}...`);
 
-        const locationObj = {
-          country: SCRAPE_COUNTRY,
-          state: SCRAPE_STATE,
-          city: SCRAPE_CITY,
-          sector: SCRAPE_SECTOR,
-        };
+        // Emit progress at ~10% increments during enrichment
+        if (i % Math.max(1, Math.floor(total / 10)) === 0) {
+          const enrichProgress = 55 + Math.round((i / total) * 35);
+          await emitProgress({
+            progress: enrichProgress,
+            currentStage: "Enriching & Scoring",
+            companiesFound: uniqueLeads.length,
+            jobsFound: allRawLeads.length,
+            leadsFound: enrichedLeads.length,
+          });
+        }
 
-        const enriched = await Promise.race([
-          enrichLead({ ...lead, ...locationObj }, { browser: null }),
-          timeoutPromise,
-        ]) as any;
+        try {
+          const tLead = perfStart(`Enrichment [${lead.companyName}]`);
 
-        enriched.country = locationObj.country;
-        enriched.state = locationObj.state;
-        enriched.city = locationObj.city;
-        enriched.sector = locationObj.sector;
+          // Acquire a browser context from the pool for this lead
+          const ctx = await pool.acquire();
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("enrichment timeout (75s)")), ENRICH_TIMEOUT_MS)
+          );
 
-        const intents = detectIntents(enriched);
-        const scored = scoreICP({ ...enriched, intents });
-        enrichedLeads.push(scored);
+          let enriched;
+          try {
+            enriched = await Promise.race([
+              enrichLead({ ...lead, ...locationObj }, { browser: ctx }),
+              timeoutPromise,
+            ]) as any;
+          } finally {
+            await pool.release(ctx);
+          }
 
-        process.stdout.write(
-          ` ICP: ${scored.icpScore}/100 (${scored.icpTier})` +
-          ` | 🎯Intents: ${intents.length}` +
-          ` | 📧${scored.emailSource || "?"}(${scored.emailConfidenceScore ?? 0}%)` +
-          ` 📞${scored.phoneNumber ? "✓" : "✗"}` +
-          ` 👥${scored.numberOfEmployees || "?"}` +
-          ` 🔗${scored.linkedinConfidence ?? 0}%\n`
-        );
+          perfEnd(tLead);
 
-        await appendLeadToCSV(scored, CONFIG.outputFile, scrapeRunId);
-      } catch (err) {
-        process.stdout.write(` ⚠️ skipped — ${err.message}\n`);
-        const fallbackLead = { ...lead, icpScore: 0, icpTier: "Cold", scrapeTimestamp: new Date().toISOString() };
-        enrichedLeads.push(fallbackLead);
-        await appendLeadToCSV(fallbackLead, CONFIG.outputFile, scrapeRunId).catch(() => {});
-      }
-    }
+          enriched.country = locationObj.country;
+          enriched.state = locationObj.state;
+          enriched.city = locationObj.city;
+          enriched.sector = locationObj.sector;
+
+          const intents = detectIntents(enriched);
+          const scored = scoreICP({ ...enriched, intents });
+          enrichedLeads.push(scored);
+
+          process.stdout.write(
+            ` ICP: ${scored.icpScore}/100 (${scored.icpTier})` +
+            ` | 🎯Intents: ${intents.length}` +
+            ` | 📧${scored.emailSource || "?"}(${scored.emailConfidenceScore ?? 0}%)` +
+            ` 📞${scored.phoneNumber ? "✓" : "✗"}` +
+            ` 👥${scored.numberOfEmployees || "?"}` +
+            ` 🔗${scored.linkedinConfidence ?? 0}%\n`
+          );
+
+          await appendLeadToCSV(scored, CONFIG.outputFile, scrapeRunId);
+          return scored;
+        } catch (err) {
+          process.stdout.write(` ⚠️ skipped — ${err.message}\n`);
+          const fallbackLead = { ...lead, icpScore: 0, icpTier: "Cold", scrapeTimestamp: new Date().toISOString() };
+          enrichedLeads.push(fallbackLead);
+          await appendLeadToCSV(fallbackLead, CONFIG.outputFile, scrapeRunId).catch(() => {});
+          return fallbackLead;
+        }
+      })
+    );
+
+    // Wait for ALL enrichments to settle (failed ones don't block others)
+    await Promise.allSettled(enrichPromises);
+    perfEnd(tEnrichAll);
 
     await emitProgress({
       progress: 90,
@@ -400,7 +473,9 @@ export async function runOrchestrator(
       console.log("⚠️ Filters removed all leads. Falling back to unfiltered enriched leads.");
     }
 
+    const tSave = perfStart("MongoDB");
     const outputPath = await saveResults(finalLeads, CONFIG.outputFile, scrapeRunId);
+    perfEnd(tSave);
     console.log(`\n✅ Done! ${finalLeads.length} leads saved to:\n   ${outputPath}`);
     if (finalLeads[0]) {
       console.log(`🏆 Top lead: ${finalLeads[0].companyName} (Score: ${finalLeads[0].icpScore})`);
@@ -461,6 +536,10 @@ export async function runOrchestrator(
     }
     throw err; // Re-throw so BullMQ can trigger retry logic
   } finally {
+    if (process.env.MONGODB_URI) {
+      await flushMongoBuffer().catch(() => {});
+    }
+    await pool.close();
     await browser.close();
     if (dbEnabled && !params.scrapeRunId) {
       // Only close if we opened it — if we were called from the worker,

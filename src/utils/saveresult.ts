@@ -2,8 +2,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ObjectId } from "mongodb";
-import { upsertLead } from "../database/repositories/LeadRepository.js";
+import { upsertLead, bulkUpsertLeads } from "../database/repositories/LeadRepository.js";
 import { getOutputDir } from "./pathResolver.ts";
+import { perfStart, perfEnd } from "./perf.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +62,21 @@ function escapeCSV(value, colName = "") {
 
 
 let writeBuffer: string[] = [];
+let mongoBuffer: any[] = [];
+
+export async function flushMongoBuffer(): Promise<void> {
+    if (mongoBuffer.length === 0) return;
+    const leadsToWrite = [...mongoBuffer];
+    mongoBuffer = [];
+    try {
+        const t = perfStart("MongoDB");
+        const { upserted, modified } = await bulkUpsertLeads(leadsToWrite);
+        perfEnd(t);
+        console.log(`   🗄️  MongoDB: ${upserted} inserted, ${modified} updated (bulkWrite buffer flush).`);
+    } catch (err: any) {
+        console.warn(`   ⚠️  MongoDB bulk write failed: ${err.message}`);
+    }
+}
 
 /** Flatten a lead so complex fields are pre-processed before CSV serialisation. */
 function flattenLead(lead: Record<string, any>): Record<string, any> {
@@ -119,12 +135,11 @@ export async function appendLeadToCSV(
         }
     }
 
-    // ── MongoDB upsert (non-blocking on failure) ──────────────────────────────
+    // ── MongoDB buffered write ────────────────────────────────────────────────
     if (process.env.MONGODB_URI) {
-        try {
-            await upsertLead({ ...lead, scrapeRunId });
-        } catch (err: any) {
-            console.warn(`⚠️  MongoDB upsert skipped for "${lead.companyName}": ${err.message}`);
+        mongoBuffer.push({ ...lead, scrapeRunId });
+        if (mongoBuffer.length >= 5) {
+            await flushMongoBuffer();
         }
     }
 }
@@ -153,12 +168,14 @@ export async function saveResults(
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(outputPath, [header, ...rows].join("\n"), "utf-8");
 
-    // ── MongoDB bulk upsert ───────────────────────────────────────────────────
+    // ── MongoDB bulk upsert (single bulkWrite round-trip) ────────────────────
     if (process.env.MONGODB_URI && leads.length > 0) {
         try {
             const leadsWithRun = leads.map(l => ({ ...l, scrapeRunId }));
-            await Promise.all(leadsWithRun.map(l => upsertLead(l)));
-            console.log(`   🗄️  MongoDB: ${leads.length} leads upserted.`);
+            const t = perfStart("MongoDB");
+            const { upserted, modified } = await bulkUpsertLeads(leadsWithRun);
+            perfEnd(t);
+            console.log(`   🗄️  MongoDB: ${upserted} inserted, ${modified} updated (bulkWrite).`);
         } catch (err: any) {
             console.warn(`   ⚠️  MongoDB bulk upsert failed: ${err.message}`);
         }

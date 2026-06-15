@@ -4,6 +4,8 @@
 // Tier 2: DuckDuckGo Lite search → Google Search fallback
 
 import https from "https";
+import pLimit from "p-limit";
+import { perfStart, perfEnd } from "../utils/perf.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -279,128 +281,134 @@ export function ddgGet(url, timeoutMs = 4000) {
     });
 }
 
-let geekflareTotalDuration = 0;
-let geekflareRequestCount = 0;
+const geekflareLimit = pLimit(2);
 
 export async function geekflareGoogleSearch(query) {
     const apiKey = process.env.GEEKFLARE_API_KEY || "";
     if (!apiKey) return [];
-    
-    let retries = 3; // 3 retries (4 attempts total)
-    let delayMs = 1200;
-    
-    while (retries >= 0) {
-        const attempt = 4 - retries;
-        const start = Date.now();
-        console.log(`[Geekflare Request]`);
-        console.log(`  endpoint = https://api.geekflare.com/search`);
-        console.log(`  method   = POST`);
-        console.log(`  query    = "${query}"`);
-        console.log(`  headers  = { "Content-Type": "application/json", "x-api-key": "[REDACTED]" }`);
-        console.log(`  timeout  = 8000ms`);
-        console.log(`  attempt  = ${attempt}/4`);
 
+    return geekflareLimit(async () => {
+        const t = perfStart("Geekflare");
         try {
-            const payload = JSON.stringify({
-                query: query,
-                country: "us"
-            });
+            let retries = 3; // 3 retries (4 attempts total)
+            let delayMs = 1200;
             
-            const { statusCode, body } = await new Promise<{ statusCode: number, body: string }>((resolve, reject) => {
-                const parsed = new URL("https://api.geekflare.com/search");
-                const options = {
-                    hostname: parsed.hostname,
-                    path: `${parsed.pathname}${parsed.search}`,
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Content-Length": Buffer.byteLength(payload),
-                        "x-api-key": apiKey
-                    },
-                    timeout: 8000,
-                };
-                const req = https.request(options, (res) => {
-                    let data = "";
-                    res.setEncoding("utf8");
-                    res.on("data", c => { if (data.length < 500000) data += c; });
-                    res.on("end", () => {
-                        resolve({ statusCode: res.statusCode || 0, body: data });
+            while (retries >= 0) {
+                const attempt = 4 - retries;
+                const start = Date.now();
+                console.log(`[Geekflare Request]`);
+                console.log(`  endpoint = https://api.geekflare.com/search`);
+                console.log(`  method   = POST`);
+                console.log(`  query    = "${query}"`);
+                console.log(`  headers  = { "Content-Type": "application/json", "x-api-key": "[REDACTED]" }`);
+                console.log(`  timeout  = 8000ms`);
+                console.log(`  attempt  = ${attempt}/4`);
+
+                try {
+                    const payload = JSON.stringify({
+                        query: query,
+                        country: "us"
                     });
-                });
-                req.on("error", reject);
-                req.on("timeout", () => {
-                    req.destroy();
-                    reject(new Error("timeout"));
-                });
-                req.write(payload);
-                req.end();
-            });
+                    
+                    const { statusCode, body } = await new Promise<{ statusCode: number, body: string }>((resolve, reject) => {
+                        const parsed = new URL("https://api.geekflare.com/search");
+                        const options = {
+                            hostname: parsed.hostname,
+                            path: `${parsed.pathname}${parsed.search}`,
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "Content-Length": Buffer.byteLength(payload),
+                                "x-api-key": apiKey
+                            },
+                            timeout: 8000,
+                        };
+                        const req = https.request(options, (res) => {
+                            let data = "";
+                            res.setEncoding("utf8");
+                            res.on("data", c => { if (data.length < 500000) data += c; });
+                            res.on("end", () => {
+                                resolve({ statusCode: res.statusCode || 0, body: data });
+                            });
+                        });
+                        req.on("error", reject);
+                        req.on("timeout", () => {
+                            req.destroy();
+                            reject(new Error("timeout"));
+                        });
+                        req.write(payload);
+                        req.end();
+                    });
 
-            const duration = Date.now() - start;
-            geekflareTotalDuration += duration;
-            geekflareRequestCount++;
-            const avg = (geekflareTotalDuration / geekflareRequestCount).toFixed(2);
+                    const duration = Date.now() - start;
+                    geekflareTotalDuration += duration;
+                    geekflareRequestCount++;
+                    const avg = (geekflareTotalDuration / geekflareRequestCount).toFixed(2);
 
-            console.log(`[Geekflare Response]`);
-            console.log(`  status   = ${statusCode}`);
-            console.log(`  duration = ${duration}ms`);
-            console.log(`  avgTime  = ${avg}ms`);
-            console.log(`  body     = ${body.substring(0, 500)}${body.length > 500 ? "..." : ""}`);
+                    console.log(`[Geekflare Response]`);
+                    console.log(`  status   = ${statusCode}`);
+                    console.log(`  duration = ${duration}ms`);
+                    console.log(`  avgTime  = ${avg}ms`);
+                    console.log(`  body     = ${body.substring(0, 500)}${body.length > 500 ? "..." : ""}`);
 
-            if (statusCode === 429) {
-                throw new Error("HTTP 429");
-            }
-            if (statusCode === 500) {
-                throw new Error("HTTP 500");
-            }
-            if (statusCode >= 200 && statusCode < 300) {
-                const data = JSON.parse(body);
-                if (Array.isArray(data.data)) {
-                    return data.data.map(item => ({
-                        title: item.title || "",
-                        url: item.url || "",
-                        snippet: item.snippet || ""
-                    }));
+                    if (statusCode === 429) {
+                        throw new Error("HTTP 429");
+                    }
+                    if (statusCode === 500) {
+                        throw new Error("HTTP 500");
+                    }
+                    if (statusCode >= 200 && statusCode < 300) {
+                        const data = JSON.parse(body);
+                        if (Array.isArray(data.data)) {
+                            return data.data.map(item => ({
+                                title: item.title || "",
+                                url: item.url || "",
+                                snippet: item.snippet || ""
+                            }));
+                        }
+                        return [];
+                    }
+                    throw new Error(`HTTP ${statusCode}`);
+
+                } catch (err: any) {
+                    const duration = Date.now() - start;
+                    const isTimeout = err.message === "timeout";
+                    const is500 = err.message === "HTTP 500";
+                    const is429 = err.message === "HTTP 429";
+
+                    console.log(`[Geekflare Response]`);
+                    console.log(`  status   = ${isTimeout ? "timeout" : err.message}`);
+                    console.log(`  duration = ${duration}ms`);
+
+                    // Check if key is invalid / quota exhausted
+                    if (err.message && (err.message.includes("402") || err.message.includes("401") || err.message.includes("403"))) {
+                        process.stdout.write(`\n⚠️  [Geekflare Error] Received ${err.message}. Quota exhausted or key invalid. Switching to public DuckDuckGo/Google fallbacks...\n`);
+                        delete process.env.GEEKFLARE_API_KEY;
+                        break;
+                    }
+
+                    if (retries > 0) {
+                        retries--;
+                        let reason = "Error";
+                        if (isTimeout) reason = "Timeout";
+                        else if (is500) reason = "HTTP 500";
+                        else if (is429) reason = "HTTP 429 Rate Limit";
+
+                        process.stdout.write(`\n⚠️  [Geekflare ${reason} Warning] Retrying query "${query}" in ${delayMs}ms... (Remaining retries: ${retries})\n`);
+                        await new Promise(r => setTimeout(r, delayMs));
+                        delayMs *= 2;
+                        continue;
+                    } else {
+                        process.stderr.write(`[Geekflare Search Error] query: ${query}, error: ${err.message}. All retries exhausted.\n`);
+                        break;
+                    }
                 }
-                return [];
             }
-            throw new Error(`HTTP ${statusCode}`);
-
-        } catch (err: any) {
-            const duration = Date.now() - start;
-            const isTimeout = err.message === "timeout";
-            const is500 = err.message === "HTTP 500";
-            const is429 = err.message === "HTTP 429";
-
-            console.log(`[Geekflare Response]`);
-            console.log(`  status   = ${isTimeout ? "timeout" : err.message}`);
-            console.log(`  duration = ${duration}ms`);
-
-            // Check if key is invalid / quota exhausted
-            if (err.message && (err.message.includes("402") || err.message.includes("401") || err.message.includes("403"))) {
-                process.stdout.write(`\n⚠️  [Geekflare Error] Received ${err.message}. Quota exhausted or key invalid. Switching to public DuckDuckGo/Google fallbacks...\n`);
-                delete process.env.GEEKFLARE_API_KEY;
-                break;
-            }
-
-            if (retries > 0) {
-                retries--;
-                let reason = "Error";
-                if (isTimeout) reason = "Timeout";
-                else if (is500) reason = "HTTP 500";
-                else if (is429) reason = "HTTP 429 Rate Limit";
-
-                process.stdout.write(`\n⚠️  [Geekflare ${reason} Warning] Retrying query "${query}" in ${delayMs}ms... (Remaining retries: ${retries})\n`);
-                await new Promise(r => setTimeout(r, delayMs));
-                delayMs *= 2;
-                continue;
-            } else {
-                process.stderr.write(`[Geekflare Search Error] query: ${query}, error: ${err.message}. All retries exhausted.\n`);
-                break;
-            }
+            return [];
+        } finally {
+            perfEnd(t);
         }
-    }
-    return [];
+    });
 }
 
 export { jitter, sleep };
