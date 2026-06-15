@@ -188,10 +188,12 @@ class PrecisionLeadSystem {
         await this.init();
         // ── Batch parallel processing using p-limit ────────────────────────────
         // Default: 3 concurrent companies (Render Free Tier safe)
-        const CONCURRENCY = parseInt(process.env.ENRICHMENT_CONCURRENCY || "3", 10);
-        const limit = pLimit(CONCURRENCY);
+        const BROWSER_POOL_SIZE = parseInt(process.env.BROWSER_POOL_SIZE || "2", 10);
+        const ENRICHMENT_CONCURRENCY = parseInt(process.env.ENRICHMENT_CONCURRENCY || "3", 10);
+        const effectiveConcurrency = Math.min(ENRICHMENT_CONCURRENCY, BROWSER_POOL_SIZE);
+        const limit = pLimit(effectiveConcurrency);
 
-        console.log(`[PrecisionLeadSystem] Processing ${companies.length} companies (concurrency=${CONCURRENCY})`);
+        console.log(`[PrecisionLeadSystem] Processing ${companies.length} companies (concurrency=${effectiveConcurrency})`);
         const tRun = perfStart("PrecisionLeadSystem.run");
 
         const settled = await Promise.allSettled(

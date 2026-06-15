@@ -546,40 +546,81 @@ async function fetchHtmlSmart(url, timeoutMs = 20000, browser = null) {
         try {
             let html = "";
             if (proxy) {
+                const tContextStart = Date.now();
                 const context = await Promise.race([
                     browser.newContext({ proxy: { server: proxy } }),
                     new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newContext timeout")), 15000))
                 ]);
-                const page = await Promise.race([
-                    context.newPage(),
-                    new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newPage timeout")), 15000))
-                ]);
-                await Promise.race([
-                    page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
-                    )
-                ]);
-                await page.waitForTimeout(2000);
-                html = await page.content();
-                await context.close();
+                const contextDuration = Date.now() - tContextStart;
+
+                try {
+                    const tPageStart = Date.now();
+                    const page = await Promise.race([
+                        context.newPage(),
+                        new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newPage timeout")), 15000))
+                    ]);
+                    const pageDuration = Date.now() - tPageStart;
+
+                    try {
+                        const tNavStart = Date.now();
+                        try {
+                            await Promise.race([
+                                page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
+                                new Promise((_, reject) =>
+                                    setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
+                                )
+                            ]);
+                            const navDuration = Date.now() - tNavStart;
+                            console.log(`[PERF] [contactEnricher/proxy] page.goto completed in ${navDuration}ms (pageCreation=${pageDuration}ms, contextCreation=${contextDuration}ms) for URL: ${url}`);
+                        } catch (err) {
+                            const navDuration = Date.now() - tNavStart;
+                            console.error(`[PERF] [contactEnricher/proxy] page.goto failed in ${navDuration}ms (pageCreation=${pageDuration}ms, contextCreation=${contextDuration}ms) for URL: ${url}. Error: ${err.message}`);
+                            throw err;
+                        }
+
+                        await page.waitForTimeout(2000);
+                        html = await page.content();
+                    } finally {
+                        await page.close().catch(() => {});
+                    }
+                } finally {
+                    await context.close().catch(() => {});
+                }
             } else {
+                const tPageStart = Date.now();
                 const page = await Promise.race([
                     browser.newPage(),
                     new Promise<any>((_, reject) => setTimeout(() => reject(new Error("fetchHtmlSmart newPage timeout")), 15000))
                 ]);
-                await Promise.race([
-                    page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
-                    )
-                ]);
-                await page.waitForTimeout(2000);
-                html = await page.content();
-                await page.close();
+                const pageDuration = Date.now() - tPageStart;
+
+                try {
+                    const tNavStart = Date.now();
+                    try {
+                        await Promise.race([
+                            page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }),
+                            new Promise((_, reject) =>
+                                setTimeout(() => reject(new Error("fetchHtmlSmart page.goto timeout")), timeoutMs)
+                            )
+                        ]);
+                        const navDuration = Date.now() - tNavStart;
+                        console.log(`[PERF] [contactEnricher/direct] page.goto completed in ${navDuration}ms (pageCreation=${pageDuration}ms) for URL: ${url}`);
+                    } catch (err) {
+                        const navDuration = Date.now() - tNavStart;
+                        console.error(`[PERF] [contactEnricher/direct] page.goto failed in ${navDuration}ms (pageCreation=${pageDuration}ms) for URL: ${url}. Error: ${err.message}`);
+                        throw err;
+                    }
+
+                    await page.waitForTimeout(2000);
+                    html = await page.content();
+                } finally {
+                    await page.close().catch(() => {});
+                }
             }
             if (html?.length > 100) return html;
-        } catch { /* fallback */ }
+        } catch (err) {
+            console.warn(`[contactEnricher] fetchHtmlSmart failed: ${err.message}`);
+        }
     }
 
     // 4) Raw request fallback

@@ -32,8 +32,12 @@ export async function scrapeLinkedIn(companyName, browser = null, locationObj = 
 
     // Step 2: If browser available, open /about and extract real data
     if (browser) {
+        let page;
         try {
-            const page = await browser.newPage();
+            const tPageStart = Date.now();
+            page = await browser.newPage();
+            const pageCreationDuration = Date.now() - tPageStart;
+
             await page.setExtraHTTPHeaders({
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -42,15 +46,25 @@ export async function scrapeLinkedIn(companyName, browser = null, locationObj = 
             // Intercept images/fonts to speed up
             await page.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}", r => r.abort());
 
-            await Promise.race([
-                page.goto(`${linkedinUrl}/about`, {
-                    waitUntil: "domcontentloaded",
-                    timeout: 15000,
-                }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("LinkedIn company page.goto timeout (15s)")), 15000)
-                )
-            ]);
+            const tNavStart = Date.now();
+            const targetUrl = `${linkedinUrl}/about`;
+            try {
+                await Promise.race([
+                    page.goto(targetUrl, {
+                        waitUntil: "domcontentloaded",
+                        timeout: 15000,
+                    }),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error("LinkedIn company page.goto timeout (15s)")), 15000)
+                    )
+                ]);
+                const navDuration = Date.now() - tNavStart;
+                console.log(`[PERF] [LinkedIn] page.goto completed in ${navDuration}ms (pageCreation=${pageCreationDuration}ms) for URL: ${targetUrl}`);
+            } catch (err) {
+                const navDuration = Date.now() - tNavStart;
+                console.error(`[PERF] [LinkedIn] page.goto failed in ${navDuration}ms (pageCreation=${pageCreationDuration}ms) for URL: ${targetUrl}. Error: ${err.message}`);
+                throw err;
+            }
 
             await page.waitForTimeout(2000 + Math.random() * 1500);
 
@@ -91,10 +105,13 @@ export async function scrapeLinkedIn(companyName, browser = null, locationObj = 
                 }
                 result.followers = data.followers;
             }
-
-            await page.close();
-        } catch {
+        } catch (err) {
+            console.warn(`[LinkedIn Scraper] Playwright failed: ${err.message}`);
             // Playwright failed — keep search-based URL + confidence 70
+        } finally {
+            if (page) {
+                await page.close().catch(() => {});
+            }
         }
     }
 
@@ -286,6 +303,8 @@ export function ddgGet(url, timeoutMs = 4000) {
     });
 }
 
+let geekflareTotalDuration = 0;
+let geekflareRequestCount = 0;
 const geekflareLimit = pLimit(2);
 
 export async function geekflareGoogleSearch(query) {

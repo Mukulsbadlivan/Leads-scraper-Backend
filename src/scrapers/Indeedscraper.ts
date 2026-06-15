@@ -17,12 +17,21 @@ export async function scrapeIndeed(page, query, locationObj, maxPages = 2) {
         console.log(`    📄 Indeed RSS page ${pageNum + 1}`);
 
         try {
-            await Promise.race([
-                page.goto(rssUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("Indeed RSS page.goto timeout (30s)")), 30000)
-                )
-            ]);
+            const tNavStart = Date.now();
+            try {
+                await Promise.race([
+                    page.goto(rssUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error("Indeed RSS page.goto timeout (30s)")), 30000)
+                    )
+                ]);
+                const navDuration = Date.now() - tNavStart;
+                console.log(`[PERF] [Indeed RSS] page.goto completed in ${navDuration}ms for URL: ${rssUrl}`);
+            } catch (err) {
+                const navDuration = Date.now() - tNavStart;
+                console.error(`[PERF] [Indeed RSS] page.goto failed/timed out in ${navDuration}ms for URL: ${rssUrl}. Error: ${err.message}`);
+                throw err;
+            }
             await page.waitForTimeout(2000);
 
             const content = await page.content();

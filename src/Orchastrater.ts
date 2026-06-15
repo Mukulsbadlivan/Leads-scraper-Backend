@@ -152,9 +152,11 @@ async function runPortalScrape(
   console.log(`[TRACE] Starting ${portal.toUpperCase()} | "${query}" in ${loc}`);
   const tStart = Date.now();
   const t = perfStart(`Portal Scraping [${portal.toUpperCase()} | ${query}]`);
+  let context;
   let page;
   try {
-    const context = await Promise.race([
+    const tContextStart = Date.now();
+    context = await Promise.race([
       browser.newContext({
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -162,12 +164,16 @@ async function runPortalScrape(
       }),
       new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`newContext timeout (20s) for ${portal}`)), 20000))
     ]);
+    const contextDuration = Date.now() - tContextStart;
     
+    const tPageStart = Date.now();
     page = await Promise.race([
       context.newPage(),
       new Promise<any>((_, reject) => setTimeout(() => reject(new Error(`newPage timeout (20s) for ${portal}`)), 20000))
     ]);
+    const pageDuration = Date.now() - tPageStart;
 
+    console.log(`[PERF] [${portal.toUpperCase()}] contextCreation=${contextDuration}ms, pageCreation=${pageDuration}ms`);
     console.log(`\n🔍 Scraping ${portal.toUpperCase()} | 🔎 "${query}" in ${loc}...`);
 
     let leads = [];
@@ -189,11 +195,10 @@ async function runPortalScrape(
     return [];
   } finally {
     if (page) {
-      try {
-        const ctx = page.context();
-        await page.close().catch(() => {});
-        await ctx.close().catch(() => {});
-      } catch { /* ignore */ }
+      await page.close().catch(() => {});
+    }
+    if (context) {
+      await context.close().catch(() => {});
     }
     perfEnd(t);
     console.log(`[TRACE] ${portal.toUpperCase()} completed in ${Date.now() - tStart}ms`);
@@ -283,36 +288,37 @@ export async function runOrchestrator(
     }
   }
 
-  await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
-
-  console.log("[TRACE] Starting Browser launch");
-  const tBrowserStart = Date.now();
-  // Always use Playwright's bundled Chromium — never system Chrome.
-  if (process.env.RENDER) {
-    process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
-  }
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
-  console.log(`[TRACE] Browser launch completed in ${Date.now() - tBrowserStart}ms`);
-
-  // ── Browser Pool ──────────────────────────────────────────────────────────
-  // Reuse contexts across enrichment calls instead of launching new Chromium.
-  console.log("[TRACE] Starting BrowserPool.init()");
-  const tPoolStart = Date.now();
-  const pool = new BrowserPool(browser);
-  await pool.init();
-  console.log(`[TRACE] BrowserPool.init() completed in ${Date.now() - tPoolStart}ms`);
-
+  let browser;
+  let pool;
   let allRawLeads = [];
 
   try {
+    await emitProgress({ progress: 5, currentStage: "Initializing Browser" });
+
+    console.log("[TRACE] Starting Browser launch");
+    const tBrowserStart = Date.now();
+    // Always use Playwright's bundled Chromium — never system Chrome.
+    if (process.env.RENDER) {
+      process.env.PLAYWRIGHT_BROWSERS_PATH = "/opt/render/project/src/ms-playwright";
+    }
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+    console.log(`[TRACE] Browser launch completed in ${Date.now() - tBrowserStart}ms`);
+
+    // ── Browser Pool ──────────────────────────────────────────────────────────
+    // Reuse contexts across enrichment calls instead of launching new Chromium.
+    console.log("[TRACE] Starting BrowserPool.init()");
+    const tPoolStart = Date.now();
+    pool = new BrowserPool(browser);
+    await pool.init();
+    console.log(`[TRACE] BrowserPool.init() completed in ${Date.now() - tPoolStart}ms`);
+
     await emitProgress({ progress: 10, currentStage: "Connecting to Portals" });
 
     // ── PARALLEL PORTAL SCRAPING ──────────────────────────────────────────────
-    // All portals × queries × locations fire concurrently.
-    // Promise.allSettled ensures one blocked source never stops the others.
+    // All portals × queries × locations fire concurrently, subject to effectiveConcurrency to avoid OOM.
     console.log("[TRACE] Starting Portal Initialization");
     const tPortals = perfStart("Portal Scraping");
 
@@ -331,18 +337,24 @@ export async function runOrchestrator(
       )
     );
 
-    console.log(`\n⚡ Starting ${scrapeJobs.length} parallel portal scrape jobs...`);
-    console.log(`[TRACE] Starting Portal Scraping Stage (Concurrently launching ${scrapeJobs.length} scrape jobs)`);
+    const BROWSER_POOL_SIZE = parseInt(process.env.BROWSER_POOL_SIZE || "2", 10);
+    const effectiveConcurrency = Math.min(ENRICHMENT_CONCURRENCY, BROWSER_POOL_SIZE);
+
+    console.log(`\n⚡ Starting ${scrapeJobs.length} portal scrape jobs with effectiveConcurrency=${effectiveConcurrency}...`);
+    console.log(`[TRACE] Starting Portal Scraping Stage (Concurrently launching up to ${effectiveConcurrency} scrape jobs)`);
     const tPortalStageStart = Date.now();
 
+    const portalLimit = pLimit(effectiveConcurrency);
     const portalResults = await Promise.allSettled(
       scrapeJobs.map(({ portal, query, loc }) =>
-        Promise.race([
-          runPortalScrape(browser, portal, query, loc, locationObj, CONFIG.maxPages),
-          new Promise<any[]>((_, reject) =>
-            setTimeout(() => reject(new Error(`Portal scraping timeout (90s) for ${portal} | ${query} | ${loc}`)), 90000)
-          )
-        ])
+        portalLimit(() =>
+          Promise.race([
+            runPortalScrape(browser, portal, query, loc, locationObj, CONFIG.maxPages),
+            new Promise<any[]>((_, reject) =>
+              setTimeout(() => reject(new Error(`Portal scraping timeout (90s) for ${portal} | ${query} | ${loc}`)), 90000)
+            )
+          ])
+        )
       )
     );
     console.log(`[TRACE] Portal Scraping Stage completed in ${Date.now() - tPortalStageStart}ms`);
@@ -384,9 +396,9 @@ export async function runOrchestrator(
     });
 
     // ── BATCH PARALLEL ENRICHMENT ─────────────────────────────────────────────
-    // Process ENRICHMENT_CONCURRENCY companies at a time using p-limit.
+    // Process effectiveConcurrency companies at a time using p-limit.
     // This prevents OOM on Render while still being 3× faster than serial.
-    console.log(`\n⚙️  Enriching and scoring ${uniqueLeads.length} leads (concurrency=${ENRICHMENT_CONCURRENCY})...`);
+    console.log(`\n⚙️  Enriching and scoring ${uniqueLeads.length} leads (concurrency=${effectiveConcurrency})...`);
 
     const enrichedLeads = [];
     const processedCompanies = getProcessedCompanies(CONFIG.outputFile);
@@ -400,8 +412,8 @@ export async function runOrchestrator(
     const ENRICH_TIMEOUT_MS = 75_000;
     const total = uniqueLeads.length;
 
-    // p-limit enforces at most ENRICHMENT_CONCURRENCY concurrent enrichments
-    const enrichLimit = pLimit(ENRICHMENT_CONCURRENCY);
+    // p-limit enforces at most effectiveConcurrency concurrent enrichments
+    const enrichLimit = pLimit(effectiveConcurrency);
 
     const enrichPromises = uniqueLeads.map((lead, i) =>
       enrichLimit(async () => {
@@ -425,26 +437,24 @@ export async function runOrchestrator(
           });
         }
 
+        let ctx;
+        let tLead;
         try {
-          const tLead = perfStart(`Enrichment [${lead.companyName}]`);
+          tLead = perfStart(`Enrichment [${lead.companyName}]`);
 
           // Acquire a browser context from the pool for this lead
-          const ctx = await pool.acquire();
+          ctx = await pool.acquire();
           const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error("enrichment timeout (75s)")), ENRICH_TIMEOUT_MS)
           );
 
-          let enriched;
-          try {
-            enriched = await Promise.race([
-              enrichLead({ ...lead, ...locationObj }, { browser: ctx }),
-              timeoutPromise,
-            ]) as any;
-          } finally {
-            await pool.release(ctx);
-          }
+          const enriched = await Promise.race([
+            enrichLead({ ...lead, ...locationObj }, { browser: ctx }),
+            timeoutPromise,
+          ]) as any;
 
           perfEnd(tLead);
+          tLead = null;
 
           enriched.country = locationObj.country;
           enriched.state = locationObj.state;
@@ -467,11 +477,18 @@ export async function runOrchestrator(
           await appendLeadToCSV(scored, CONFIG.outputFile, scrapeRunId);
           return scored;
         } catch (err) {
+          if (tLead) {
+            try { perfEnd(tLead); } catch {}
+          }
           process.stdout.write(` ⚠️ skipped — ${err.message}\n`);
           const fallbackLead = { ...lead, icpScore: 0, icpTier: "Cold", scrapeTimestamp: new Date().toISOString() };
           enrichedLeads.push(fallbackLead);
           await appendLeadToCSV(fallbackLead, CONFIG.outputFile, scrapeRunId).catch(() => {});
           return fallbackLead;
+        } finally {
+          if (ctx) {
+            await pool.release(ctx);
+          }
         }
       })
     );
@@ -566,12 +583,16 @@ export async function runOrchestrator(
     if (process.env.MONGODB_URI) {
       await flushMongoBuffer().catch(() => {});
     }
-    await pool.close();
-    await browser.close();
+    if (pool) {
+      await pool.close().catch(() => {});
+    }
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
     if (dbEnabled && !params.scrapeRunId) {
       // Only close if we opened it — if we were called from the worker,
       // the worker manages the DB connection lifecycle
-      await closeConnection();
+      await closeConnection().catch(() => {});
     }
   }
 }

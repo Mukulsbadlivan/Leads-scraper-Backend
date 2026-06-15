@@ -11,6 +11,7 @@ import { findWebsite } from "../utils/websiteFinder.ts";
 import { extractEmail } from "../utils/emailExtractor.ts";
 import { enrichContact } from "./contactEnricher.ts";
 import { trackLinkedInActivity } from "./linkedinActivityTracker.ts";
+import { perfStart, perfEnd } from "../utils/perf.ts";
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 

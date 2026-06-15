@@ -15,12 +15,21 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🔗 Trying LinkedIn Jobs RSS...`);
     try {
         const linkedinUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r604800`;
-        await Promise.race([
-            page.goto(linkedinUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("LinkedIn Jobs page.goto timeout (30s)")), 30000)
-            )
-        ]);
+        const tNavStart = Date.now();
+        try {
+            await Promise.race([
+                page.goto(linkedinUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("LinkedIn Jobs page.goto timeout (30s)")), 30000)
+                )
+            ]);
+            const navDuration = Date.now() - tNavStart;
+            console.log(`[PERF] [Glassdoor/LinkedIn RSS] page.goto completed in ${navDuration}ms for URL: ${linkedinUrl}`);
+        } catch (err) {
+            const navDuration = Date.now() - tNavStart;
+            console.error(`[PERF] [Glassdoor/LinkedIn RSS] page.goto failed/timed out in ${navDuration}ms for URL: ${linkedinUrl}. Error: ${err.message}`);
+            throw err;
+        }
         await page.waitForTimeout(3000);
 
         const linkedinLeads = await page.evaluate(() => {
@@ -61,12 +70,21 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🌐 Trying Remotive API...`);
     try {
         const remotiveUrl = `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=50`;
-        await Promise.race([
-            page.goto(remotiveUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Remotive API page.goto timeout (30s)")), 30000)
-            )
-        ]);
+        const tNavStart = Date.now();
+        try {
+            await Promise.race([
+                page.goto(remotiveUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("Remotive API page.goto timeout (30s)")), 30000)
+                )
+            ]);
+            const navDuration = Date.now() - tNavStart;
+            console.log(`[PERF] [Glassdoor/Remotive] page.goto completed in ${navDuration}ms for URL: ${remotiveUrl}`);
+        } catch (err) {
+            const navDuration = Date.now() - tNavStart;
+            console.error(`[PERF] [Glassdoor/Remotive] page.goto failed/timed out in ${navDuration}ms for URL: ${remotiveUrl}. Error: ${err.message}`);
+            throw err;
+        }
         await page.waitForTimeout(1500);
 
         const bodyText = await page.evaluate(() => document.body.innerText);
@@ -97,12 +115,21 @@ export async function scrapeGlassdoor(page, query, locationObj, maxPages = 2) {
     console.log(`    🌐 Trying Arbeitnow API...`);
     try {
         const arbeitnowUrl = `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(query)}`;
-        await Promise.race([
-            page.goto(arbeitnowUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("Arbeitnow API page.goto timeout (30s)")), 30000)
-            )
-        ]);
+        const tNavStart = Date.now();
+        try {
+            await Promise.race([
+                page.goto(arbeitnowUrl, { waitUntil: "domcontentloaded", timeout: 30000 }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("Arbeitnow API page.goto timeout (30s)")), 30000)
+                )
+            ]);
+            const navDuration = Date.now() - tNavStart;
+            console.log(`[PERF] [Glassdoor/Arbeitnow] page.goto completed in ${navDuration}ms for URL: ${arbeitnowUrl}`);
+        } catch (err) {
+            const navDuration = Date.now() - tNavStart;
+            console.error(`[PERF] [Glassdoor/Arbeitnow] page.goto failed/timed out in ${navDuration}ms for URL: ${arbeitnowUrl}. Error: ${err.message}`);
+            throw err;
+        }
         await page.waitForTimeout(1500);
 
         const bodyText2 = await page.evaluate(() => document.body.innerText);

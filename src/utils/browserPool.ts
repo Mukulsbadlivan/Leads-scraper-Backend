@@ -22,6 +22,8 @@ const USER_AGENT =
 interface PoolEntry {
   context: BrowserContext;
   inUse: boolean;
+  acquiredAt?: number;
+  acquiredFrom?: string;
 }
 
 export class BrowserPool {
@@ -73,34 +75,58 @@ export class BrowserPool {
     }
   }
 
+  private _checkLeaks(): void {
+    const now = Date.now();
+    this.pool.forEach((e, idx) => {
+      if (e.inUse && e.acquiredAt && (now - e.acquiredAt > 90000)) {
+        console.warn(`[BrowserPool] ⚠️ Leak detected? Context #${idx} has been held for ${Math.round((now - e.acquiredAt) / 1000)}s. Acquired from: ${e.acquiredFrom}`);
+      }
+    });
+  }
+
   async acquire(timeoutMs = 30000): Promise<BrowserContext> {
     if (this.pool.length === 0) {
       throw new Error("[BrowserPool] Cannot acquire context: Pool is empty or failed to initialize.");
     }
+
+    this._checkLeaks();
+
+    const stack = new Error().stack || "";
+    const acquiredFrom = stack.split("\n").slice(2, 4).map(l => l.trim()).join(" -> ");
+
     // Look for a free context in the pool
     const entry = this.pool.find((e) => !e.inUse);
     if (entry) {
       entry.inUse = true;
-      console.log(`[BrowserPool] 🔒 Context acquired (${this._usedCount()}/${this.pool.length} in use)`);
+      entry.acquiredAt = Date.now();
+      entry.acquiredFrom = acquiredFrom;
+      console.log(`[BrowserPool] 🔒 Context acquired (${this._usedCount()}/${this.pool.length} in use) from: ${acquiredFrom}`);
       return entry.context;
     }
 
     // All contexts are busy — wait for one to be released
-    console.log(`[BrowserPool] ⏳ All contexts busy, waiting... (${this._usedCount()}/${this.pool.length})`);
+    console.log(`[BrowserPool] ⏳ All contexts busy, waiting... (${this._usedCount()}/${this.pool.length}) from: ${acquiredFrom}`);
     return new Promise<BrowserContext>((resolve, reject) => {
+      const wrappedResolve = (ctx: BrowserContext) => {
+        clearTimeout(timer);
+        const e = this.pool.find((x) => x.context === ctx);
+        if (e) {
+          e.inUse = true;
+          e.acquiredAt = Date.now();
+          e.acquiredFrom = acquiredFrom;
+          console.log(`[BrowserPool] 🔒 Context acquired after wait (${this._usedCount()}/${this.pool.length} in use) from: ${acquiredFrom}`);
+        }
+        resolve(ctx);
+      };
+
       const timer = setTimeout(() => {
         // Remove from waiters list to prevent leak
-        const idx = this.waiters.indexOf(resolve);
+        const idx = this.waiters.indexOf(wrappedResolve);
         if (idx !== -1) {
           this.waiters.splice(idx, 1);
         }
-        reject(new Error(`[BrowserPool] Timeout waiting for browser context (${timeoutMs}ms)`));
+        reject(new Error(`[BrowserPool] Timeout waiting for browser context (${timeoutMs}ms). Requested from: ${acquiredFrom}`));
       }, timeoutMs);
-
-      const wrappedResolve = (ctx: BrowserContext) => {
-        clearTimeout(timer);
-        resolve(ctx);
-      };
 
       this.waiters.push(wrappedResolve);
     });
@@ -123,13 +149,17 @@ export class BrowserPool {
       await context.clearCookies();
     } catch { /* non-fatal */ }
 
+    const heldDuration = entry.acquiredAt ? Date.now() - entry.acquiredAt : 0;
+    const acquiredFrom = entry.acquiredFrom || "unknown";
+
     entry.inUse = false;
-    console.log(`[BrowserPool] 🔓 Context released (${this._usedCount()}/${this.pool.length} in use)`);
+    entry.acquiredAt = undefined;
+    entry.acquiredFrom = undefined;
+    console.log(`[BrowserPool] 🔓 Context released (held for ${heldDuration}ms, acquired from: ${acquiredFrom}) (${this._usedCount()}/${this.pool.length} in use)`);
 
     // Wake up a waiter if any are queued
     if (this.waiters.length > 0) {
       const waiter = this.waiters.shift()!;
-      entry.inUse = true;
       waiter(entry.context);
     }
   }
