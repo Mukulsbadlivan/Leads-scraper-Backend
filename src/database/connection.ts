@@ -3,13 +3,17 @@ import { MongoClient, Db } from "mongodb";
 // ─── Singleton state ───────────────────────────────────────────────────────────
 let client: MongoClient | null = null;
 let db: Db | null = null;
+let clientPromise: Promise<MongoClient> | null = null;
 
 /**
  * Returns the cached MongoClient, connecting on first call.
- * Reads MONGODB_URI and DATABASE_NAME from process.env.
+ * A failed connect must never leave a half-initialized client in the singleton:
+ * the API server intentionally remains available when MongoDB is temporarily
+ * unavailable, so later requests must be able to retry the connection.
  */
 export async function getClient(): Promise<MongoClient> {
   if (client) return client;
+  if (clientPromise) return clientPromise;
 
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -19,16 +23,30 @@ export async function getClient(): Promise<MongoClient> {
     );
   }
 
-  client = new MongoClient(uri, {
-    // Sensible production defaults
+  const candidate = new MongoClient(uri, {
     connectTimeoutMS: 10_000,
     socketTimeoutMS: 45_000,
     maxPoolSize: 10,
   });
 
-  await client.connect();
-  console.log("✅ MongoDB connected.");
-  return client;
+  // Share one in-flight connection attempt across concurrent API requests.
+  clientPromise = candidate
+    .connect()
+    .then((connectedClient) => {
+      client = connectedClient;
+      console.log("✅ MongoDB connected.");
+      return connectedClient;
+    })
+    .catch(async (error: unknown) => {
+      // Do not cache a client whose topology never connected successfully.
+      client = null;
+      db = null;
+      clientPromise = null;
+      await candidate.close().catch(() => undefined);
+      throw error;
+    });
+
+  return clientPromise;
 }
 
 /**
@@ -45,12 +63,17 @@ export async function getDb(): Promise<Db> {
 
 /**
  * Gracefully closes the MongoDB connection.
- * Should be called in finally blocks or on process exit.
  */
 export async function closeConnection(): Promise<void> {
-  if (!client) return;
-  await client.close();
+  const pending = clientPromise;
+  const activeClient = client ?? (pending ? await pending.catch(() => null) : null);
+
   client = null;
   db = null;
-  console.log("🔌 MongoDB connection closed.");
+  clientPromise = null;
+
+  if (activeClient) {
+    await activeClient.close();
+    console.log("🔌 MongoDB connection closed.");
+  }
 }
